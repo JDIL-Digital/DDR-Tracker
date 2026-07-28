@@ -43,9 +43,8 @@ export function loadEnvLocal() {
 }
 
 // --- Locate the Excel file ---------------------------------------------------
-export function resolveInputFile() {
-  const arg = process.argv[2]
-  if (arg) return arg
+export function resolveInputFile(explicitPath) {
+  if (explicitPath) return explicitPath
   const dir = 'samples'
   const files = readdirSync(dir).filter((f) => /\.(xlsx|xls)$/i.test(f))
   if (files.length === 0) throw new Error(`No .xls/.xlsx file found in ${dir}/`)
@@ -291,8 +290,12 @@ export function validate(result, codes) {
 
 // --- CLI ---------------------------------------------------------------------
 async function main() {
-  const inputFile = resolveInputFile()
+  const args = process.argv.slice(2)
+  const doSave = args.includes('--save')
+  const fileArg = args.find((a) => !a.startsWith('-')) // first non-flag arg = file path
+  const inputFile = resolveInputFile(fileArg)
   console.log(`Input file : ${inputFile}`)
+  console.log(`Mode       : ${doSave ? 'SAVE (writing to Supabase)' : 'DRY RUN (print only) — pass --save to write'}`)
 
   const { result, codes, cellCount } = await extractDDR(inputFile)
   console.log(`Cells read : ${cellCount} non-empty cells`)
@@ -316,7 +319,24 @@ async function main() {
   console.log(`Total activity hours: ${totalHrs.toFixed(2)} h (target ${HRS_TARGET} +/-${HRS_TOLERANCE})`)
   console.log(`Activities: ${result.activities?.length ?? 0} | Inventory rows: ${result.inventory?.length ?? 0}`)
 
-  console.log('\nNote: nothing was written to Supabase or emailed (extraction test only).')
+  if (!doSave) {
+    console.log('\nNote: DRY RUN — nothing was written to Supabase or emailed. Re-run with --save to persist.')
+    return
+  }
+
+  // --- SAVE: hand off to the server-side writer (secret key; not front-end) ---
+  console.log('\n===================== SUPABASE WRITE ======================')
+  const { saveReport } = await import('./supabase-server.js')
+  const summary = await saveReport(result, { validationPassed: allPass })
+  console.log(`Rig        : "${summary.rigName}" (${summary.rigCreated ? 'CREATED' : 'existing'}, id=${summary.rigId})`)
+  console.log(`Report     : ${summary.reportAction.toUpperCase()} (id=${summary.reportId})`)
+  console.log(`Activities : ${summary.activitiesWritten} written${summary.nulledCodeCount ? ` (${summary.nulledCodeCount} with code nulled)` : ''}`)
+  console.log(`Inventory  : ${summary.inventoryWritten} written`)
+  if (summary.unknownCodes.length) {
+    console.log(`Unknown codes (not in code_master): ${summary.unknownCodes.join(', ')}`)
+  }
+  console.log(`extraction_status: ${summary.extractionStatus}`)
+  console.log('\nDone. Emailing is still out of scope (not implemented yet).')
 }
 
 // Run the CLI only when executed directly (not when imported).
