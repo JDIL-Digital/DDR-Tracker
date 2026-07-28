@@ -9,9 +9,13 @@
 // If no path is given, the first Excel file in samples/ is used.
 //
 // ANTHROPIC_API_KEY is read from .env.local (never hardcoded).
+//
+// The core extraction is exported as extractDDR() so other scripts (e.g. a
+// multi-run consistency harness) can reuse the exact same inputs.
 
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import XLSX from 'xlsx'
 
@@ -20,7 +24,7 @@ const HRS_TARGET = 24
 const HRS_TOLERANCE = 0.5
 
 // --- Load ANTHROPIC_API_KEY from .env.local (no dependency on dotenv) --------
-function loadEnvLocal() {
+export function loadEnvLocal() {
   let text
   try {
     text = readFileSync('.env.local', 'utf8')
@@ -39,7 +43,7 @@ function loadEnvLocal() {
 }
 
 // --- Locate the Excel file ---------------------------------------------------
-function resolveInputFile() {
+export function resolveInputFile() {
   const arg = process.argv[2]
   if (arg) return arg
   const dir = 'samples'
@@ -51,7 +55,7 @@ function resolveInputFile() {
 // --- Excel -> lossless "SheetName!A1 = value" text lines ---------------------
 // Position-independent: every non-empty cell of every sheet becomes one line,
 // so different rig layouts don't need custom parsing.
-function excelToLines(filePath) {
+export function excelToLines(filePath) {
   const wb = XLSX.readFile(filePath, { cellDates: true })
   const lines = []
   for (const sheetName of wb.SheetNames) {
@@ -78,7 +82,7 @@ function excelToLines(filePath) {
 }
 
 // --- Parse the valid activity codes from the seed migration ------------------
-function loadCodeMaster() {
+export function loadCodeMaster() {
   const sql = readFileSync('supabase/migrations/0002_seed_codes.sql', 'utf8')
   const re = /\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(true|false)\s*\)/g
   const codes = []
@@ -93,12 +97,13 @@ function loadCodeMaster() {
 const num = { type: ['number', 'null'] }
 const str = { type: ['string', 'null'] }
 
+// Note: the API caps schemas at 16 union-typed (nullable) params. The
+// always-present fields (rig_name, report_date, activity hrs/code/remarks,
+// inventory item) are non-nullable; the rest are nullable for genuinely-absent
+// values. Current union count = 15.
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  // Note: the API caps schemas at 16 union-typed (nullable) params, so the
-  // always-present fields (rig_name, report_date, activity hrs/code, inventory
-  // item) are non-nullable; the rest are nullable for genuinely-absent values.
   properties: {
     rig_name: { type: 'string' },
     well_no: str,
@@ -119,7 +124,7 @@ const SCHEMA = {
           code: { type: 'string' },
           depth_in_m: num,
           depth_out_m: num,
-          remarks: str,
+          remarks: { type: 'string' },
         },
         required: ['time_from', 'time_to', 'hrs', 'code', 'depth_in_m', 'depth_out_m', 'remarks'],
       },
@@ -134,10 +139,11 @@ const SCHEMA = {
           unit: str,
           opening: num,
           received: num,
+          generated: num,
           consumed: num,
           closing: num,
         },
-        required: ['item', 'unit', 'opening', 'received', 'consumed', 'closing'],
+        required: ['item', 'unit', 'opening', 'received', 'generated', 'consumed', 'closing'],
       },
     },
   },
@@ -166,15 +172,33 @@ function buildPrompt(cellLines, codes) {
     'one per line, in the form `SheetName!CellRef = value`. Layouts vary between rigs,',
     'so infer meaning from labels and nearby cells rather than fixed positions.',
     '',
-    'Rules:',
+    'GENERAL RULES:',
     '- report_date MUST be ISO format yyyy-mm-dd.',
     '- Numeric fields must be numbers (not strings); use null when a value is genuinely absent.',
-    '- The time-log / operations table becomes activities[]. Each row: time_from, time_to,',
-    '  hours (hrs), depth in/out if present, and a remark describing the operation.',
-    '- For each activity, map the operation to the CLOSEST matching code from the list below,',
-    '  and put that code string in the "code" field. Every activity must have a valid code.',
+    '',
+    'ACTIVITIES (the time-log / operations table -> activities[]):',
+    '- One row per time interval: time_from, time_to, hours (hrs), depth in/out if present,',
+    '  and the remark describing the operation.',
     '- Activities should together account for the full 24-hour day.',
-    '- inventory[] holds materials/consumables rows (item, unit, opening, received, consumed, closing).',
+    '- Map each activity to the CLOSEST valid code from the list below.',
+    '- If the remark clearly states a CAUSE, choose the MOST SPECIFIC matching code, not a',
+    '  generic one. Example: a remark of "WOW" or "waiting on weather" maps to the',
+    '  weather-waiting code (18), NOT the generic waiting-on-decision/instructions code (21).',
+    '- If the correct code is genuinely ambiguous, pick the closest one AND keep the full',
+    '  original remark text in `remarks` so a human can verify the mapping.',
+    '',
+    'INVENTORY (the bulk / mud & materials table, often headed "BULK" -> inventory[]):',
+    '- Output ONE row for EVERY row of the inventory table — e.g. P/Water, D/Water,',
+    '  Fuel Oil, B. Cement / Neat Cement, Barite, Base Oil, Premix, and any others present.',
+    '  Do NOT skip a row even if all of its numbers are zero.',
+    '- ALWAYS include the Fuel Oil / diesel row whenever it appears in the table.',
+    '- The columns, in order, are: Opening balance -> Received -> Made/Generated -> Consumed',
+    '  -> Closing. The made/generated column may be labelled "MADE"; map it to `generated`.',
+    '  Be careful not to shift Consumed/Closing when a Made/Generated column is present.',
+    '- Separate the unit from the item name: put the clean name in `item` and the unit of',
+    '  measure in `unit`. Examples: "Fuel Oil (KL)" -> item "Fuel Oil", unit "KL";',
+    '  "D/Water(MT)" -> item "D/Water", unit "MT". If a row has no unit, set unit null but',
+    '  still output the item.',
     '',
     'Valid activity codes (code = description [category]):',
     codeList,
@@ -185,12 +209,39 @@ function buildPrompt(cellLines, codes) {
   ].join('\n')
 }
 
+// --- Core extraction (reusable) ---------------------------------------------
+export async function extractDDR(inputFile) {
+  loadEnvLocal()
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not found in .env.local')
+
+  const cellLines = excelToLines(inputFile)
+  const codes = loadCodeMaster()
+  const client = new Anthropic({ apiKey })
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    temperature: 0, // near-deterministic output (allowed on Haiku 4.5)
+    system:
+      'You are a meticulous data-extraction engine for oil & gas daily drilling reports. ' +
+      'Return only what the source supports; never fabricate values.',
+    messages: [{ role: 'user', content: buildPrompt(cellLines, codes) }],
+    output_config: { format: { type: 'json_schema', schema: SCHEMA } },
+  })
+
+  const textBlock = response.content.find((b) => b.type === 'text')
+  if (!textBlock) throw new Error('No text block in model response.')
+  const result = JSON.parse(textBlock.text)
+
+  return { result, codes, cellCount: cellLines.length }
+}
+
 // --- Validation --------------------------------------------------------------
-function validate(result, codes) {
+export function validate(result, codes) {
   const validCodes = new Set(codes.map((c) => c.code))
   const checks = []
 
-  // 1) Required top-level fields present
   const requiredPresent =
     result.rig_name != null &&
     String(result.rig_name).trim() !== '' &&
@@ -208,15 +259,14 @@ function validate(result, codes) {
         )}, activities=${Array.isArray(result.activities) ? result.activities.length : 'n/a'}`,
   })
 
-  // 1b) report_date is ISO yyyy-mm-dd
-  const isoOk = typeof result.report_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(result.report_date)
+  const isoOk =
+    typeof result.report_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(result.report_date)
   checks.push({
     name: 'report_date is ISO yyyy-mm-dd',
     pass: isoOk,
     detail: isoOk ? '' : `got ${JSON.stringify(result.report_date)}`,
   })
 
-  // 2) Sum of activity hours ~ 24 (+/- 0.5)
   const activities = Array.isArray(result.activities) ? result.activities : []
   const totalHrs = activities.reduce((sum, a) => sum + (typeof a.hrs === 'number' ? a.hrs : 0), 0)
   const hrsOk = Math.abs(totalHrs - HRS_TARGET) <= HRS_TOLERANCE
@@ -226,7 +276,6 @@ function validate(result, codes) {
     detail: `total = ${totalHrs.toFixed(2)} h`,
   })
 
-  // 3) Every activity code exists in code_master
   const unknown = []
   activities.forEach((a, i) => {
     if (!validCodes.has(a.code)) unknown.push(`row ${i + 1}: ${JSON.stringify(a.code)}`)
@@ -240,46 +289,15 @@ function validate(result, codes) {
   return { checks, totalHrs }
 }
 
-// --- Main --------------------------------------------------------------------
+// --- CLI ---------------------------------------------------------------------
 async function main() {
-  loadEnvLocal()
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not found in .env.local')
-
   const inputFile = resolveInputFile()
   console.log(`Input file : ${inputFile}`)
 
-  const cellLines = excelToLines(inputFile)
-  console.log(`Cells read : ${cellLines.length} non-empty cells`)
-
-  const codes = loadCodeMaster()
+  const { result, codes, cellCount } = await extractDDR(inputFile)
+  console.log(`Cells read : ${cellCount} non-empty cells`)
   console.log(`Code master: ${codes.length} valid activity codes loaded`)
 
-  const client = new Anthropic({ apiKey })
-
-  console.log(`\nCalling ${MODEL} (structured output)...`)
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    system:
-      'You are a meticulous data-extraction engine for oil & gas daily drilling reports. ' +
-      'Return only what the source supports; never fabricate values.',
-    messages: [{ role: 'user', content: buildPrompt(cellLines, codes) }],
-    output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-  })
-
-  const textBlock = response.content.find((b) => b.type === 'text')
-  if (!textBlock) throw new Error('No text block in model response.')
-
-  let result
-  try {
-    result = JSON.parse(textBlock.text)
-  } catch (err) {
-    console.error('Failed to parse model output as JSON:\n', textBlock.text)
-    throw err
-  }
-
-  // --- Output ---
   console.log('\n===================== EXTRACTED JSON =====================')
   console.log(JSON.stringify(result, null, 2))
 
@@ -301,7 +319,10 @@ async function main() {
   console.log('\nNote: nothing was written to Supabase or emailed (extraction test only).')
 }
 
-main().catch((err) => {
-  console.error('\nERROR:', err.message)
-  process.exitCode = 1
-})
+// Run the CLI only when executed directly (not when imported).
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  main().catch((err) => {
+    console.error('\nERROR:', err.message)
+    process.exitCode = 1
+  })
+}
