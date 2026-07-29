@@ -120,47 +120,62 @@ function headerValue(headers, name) {
   return h ? h.value : ''
 }
 
-// Walk the MIME tree collecting attachment filenames.
-function collectAttachmentNames(payload) {
-  const names = []
+// Broad Gmail prefilter; the strict subject rule (SUBJECT_RE) is applied in code.
+const GMAIL_QUERY = 'has:attachment (subject:DDR OR subject:DPR OR subject:DRR)'
+
+// Walk the MIME tree collecting Excel attachment parts (with their attachmentId
+// so callers can download them).
+function collectExcelParts(payload) {
+  const parts = []
   ;(function walk(part) {
     if (!part) return
-    if (part.filename && part.filename.length > 0) names.push(part.filename)
+    if (part.filename && EXCEL_RE.test(part.filename) && part.body?.attachmentId) {
+      parts.push({ filename: part.filename, attachmentId: part.body.attachmentId, mimeType: part.mimeType })
+    }
     if (Array.isArray(part.parts)) part.parts.forEach(walk)
   })(payload)
-  return names
+  return parts
 }
 
-export async function listDDR(client) {
+// Rich finder: returns matching messages (most-recent first) with the message id
+// and per-attachment {filename, attachmentId} so callers can download them.
+export async function findDDRMessages(client) {
   const gmail = google.gmail({ version: 'v1', auth: client })
-
-  // Broad prefilter in the Gmail query; strict "starts with DDR_" + Excel check in code.
-  const listRes = await gmail.users.messages.list({
-    userId: 'me',
-    q: 'has:attachment (subject:DDR OR subject:DPR OR subject:DRR)',
-    maxResults: 50,
-  })
+  const listRes = await gmail.users.messages.list({ userId: 'me', q: GMAIL_QUERY, maxResults: 50 })
   const ids = (listRes.data.messages || []).map((m) => m.id)
 
-  const matches = []
+  const out = []
   for (const id of ids) {
     const msg = await gmail.users.messages.get({ userId: 'me', id, format: 'full' })
     const headers = msg.data.payload?.headers || []
     const subject = headerValue(headers, 'Subject')
     if (!SUBJECT_RE.test(subject)) continue
 
-    const attachments = collectAttachmentNames(msg.data.payload)
-    const excelAttachments = attachments.filter((n) => EXCEL_RE.test(n))
+    const excelAttachments = collectExcelParts(msg.data.payload)
     if (excelAttachments.length === 0) continue
 
-    matches.push({
+    out.push({
+      id,
       subject: subject.trim(),
       from: headerValue(headers, 'From'),
       date: headerValue(headers, 'Date'),
-      attachments: excelAttachments,
+      internalDate: Number(msg.data.internalDate) || 0,
+      excelAttachments,
     })
   }
-  return matches
+  out.sort((a, b) => b.internalDate - a.internalDate) // most recent first
+  return out
+}
+
+// Listing shape used by the fetch-gmail CLI (filenames only).
+export async function listDDR(client) {
+  const messages = await findDDRMessages(client)
+  return messages.map((m) => ({
+    subject: m.subject,
+    from: m.from,
+    date: m.date,
+    attachments: m.excelAttachments.map((a) => a.filename),
+  }))
 }
 
 // --- CLI ---------------------------------------------------------------------

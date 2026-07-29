@@ -57,3 +57,6 @@ google-credentials.json
 google-token.json
 # defensive: also catch double-extension / variant names (e.g. google-credentials.json.json)
 google-*.json
+
+# Local processed-email record (not real data, but machine-local state)
+.processed-emails.json
