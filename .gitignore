@@ -51,3 +51,9 @@ coverage/
 
 # Sample / real rig DDR data — must never be committed
 samples/
+
+# Google OAuth secrets — must never be committed
+google-credentials.json
+google-token.json
+# defensive: also catch double-extension / variant names (e.g. google-credentials.json.json)
+google-*.json

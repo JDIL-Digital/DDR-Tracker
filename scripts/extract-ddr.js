@@ -55,7 +55,12 @@ export function resolveInputFile(explicitPath) {
 // Position-independent: every non-empty cell of every sheet becomes one line,
 // so different rig layouts don't need custom parsing.
 export function excelToLines(filePath) {
-  const wb = XLSX.readFile(filePath, { cellDates: true })
+  // Read bytes with Node's fs and parse from the buffer. The maintained SheetJS
+  // ESM build does not auto-wire fs, so XLSX.readFile(path) fails; XLSX.read on
+  // a buffer is the portable, filename-quirk-proof path (and fine for the
+  // untrusted email attachments this will soon handle).
+  const buf = readFileSync(filePath)
+  const wb = XLSX.read(buf, { type: 'buffer', cellDates: true })
   const lines = []
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName]
