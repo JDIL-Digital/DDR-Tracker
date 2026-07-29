@@ -15,6 +15,7 @@
     "googleapis": "^173.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "resend": "^6.18.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {

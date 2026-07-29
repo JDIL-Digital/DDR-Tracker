@@ -60,3 +60,6 @@ google-*.json
 
 # Local processed-email record (not real data, but machine-local state)
 .processed-emails.json
+
+# Generated summary preview — contains real report data, must not be committed
+daily-summary-preview.html
