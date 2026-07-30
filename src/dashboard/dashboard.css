@@ -684,3 +684,52 @@ body {
 .btn:hover:not(:disabled) { border-color: var(--green); color: var(--green); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn svg { stroke: currentColor; }
+
+/* ===== Reports page ===== */
+.report-stack { display: flex; flex-direction: column; gap: 14px; }
+/* section cards with colored left border */
+.panel.accent { border-left: 3px solid var(--k, var(--green)); }
+
+.export-pdf { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; background: rgba(31, 181, 94, 0.14); border: 1px solid rgba(31, 181, 94, 0.4); color: var(--green); font: inherit; font-size: 12.5px; font-weight: 700; padding: 8px 14px; border-radius: 8px; cursor: pointer; }
+.export-pdf:hover { background: rgba(31, 181, 94, 0.22); }
+
+/* category pills in the time-by-code table */
+.catpill { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 3px 8px; border-radius: 5px; white-space: nowrap; }
+.cat-prod { background: rgba(31, 181, 94, 0.15); color: var(--green); }
+.cat-npt { background: rgba(240, 74, 66, 0.15); color: var(--red); }
+.cat-comp { background: rgba(62, 143, 224, 0.16); color: var(--blue); }
+.cat-unk { background: var(--awbg); color: var(--dim); }
+
+/* mini share bar inside table */
+.minibar { height: 7px; background: var(--track); border-radius: 4px; overflow: hidden; min-width: 60px; }
+.minibar-fill { height: 100%; background: var(--blue); border-radius: 4px; }
+
+/* NPT / fuel KPI mini-tiles */
+.npt-kpis { display: flex; gap: 26px; margin: 4px 0 16px; }
+.npt-kpi-num { font-size: 26px; font-weight: 700; line-height: 1; }
+.npt-kpi-num small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.npt-kpi-lbl { font-size: 11px; color: var(--dim); margin-top: 6px; }
+.npt-split { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.subhd { font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); font-weight: 600; margin-bottom: 10px; }
+.remark-cell { white-space: normal; max-width: 420px; color: var(--muted); font-size: 12px; }
+
+@media (max-width: 900px) {
+  .npt-split { grid-template-columns: 1fr; }
+}
+
+/* ===== Print / Export PDF: force a clean light layout, hide app chrome ===== */
+@media print {
+  :root {
+    --bg: #ffffff; --sidebar: #ffffff; --panel: #ffffff; --card: #ffffff; --card2: #ffffff;
+    --border: #d7dbe2; --border2: #c3c9d2; --text: #14181f; --muted: #444c57; --dim: #6b7481;
+    --green: #019639; --red: #e21c1c; --amber: #b9791f; --blue: #2f6fbf;
+    --track: #e6e9ee; --awbg: #eef1f5; --hover: #ffffff; --barstub: #d7dbe2;
+  }
+  .side, .topbar, .no-print, .report-controls { display: none !important; }
+  .app { display: block !important; }
+  .main { padding: 0 !important; }
+  .wrap { padding: 12px 6px !important; }
+  body, .app, .main, .wrap { background: #ffffff !important; }
+  .panel { break-inside: avoid; page-break-inside: avoid; box-shadow: none; }
+  .sec-h .hint { display: none; }
+}
