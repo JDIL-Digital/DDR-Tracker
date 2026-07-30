@@ -10,7 +10,7 @@ export default function RopChart({ data }) {
           const hasVal = c.value != null
           const barStyle = hasVal
             ? { height: `${Math.max(c.pct, 3)}%`, ...(c.amber ? { background: 'var(--amber)' } : null) }
-            : { height: '2%', background: '#2b333d' }
+            : { height: '2%', background: 'var(--barstub)' }
           return (
             <div className="col" key={c.label}>
               <div className="b" style={barStyle} />

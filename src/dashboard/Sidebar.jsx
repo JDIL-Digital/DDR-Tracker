@@ -1,20 +1,28 @@
-// Sidebar — brand, nav, user. Static chrome (matches the mockup); nav is
-// non-functional for this local-only step.
-export default function Sidebar() {
+// Sidebar — brand, nav, user. Fleet + Analytics switch the active page; the
+// remaining items are static chrome for this local-only step.
+export default function Sidebar({ active = 'fleet', onNavigate = () => {} }) {
+  const nav = (view) => (e) => {
+    e.preventDefault()
+    onNavigate(view)
+  }
   return (
     <aside className="side">
       <div className="brand">
-        <div className="j">JINDAL</div>
-        <div className="sub">DRILLING &amp; INDUSTRIES LTD.</div>
+        {/* Logo plate: fixed white backing so the official Jindal logo (an
+            opaque JPG on white) renders cleanly in both dark and light modes.
+            The logo image itself is unaltered. */}
+        <div className="logo-plate">
+          <img className="logo-img" src="/Jindal%20Logo.jpg" alt="Jindal Drilling &amp; Industries Ltd." />
+        </div>
         <div className="app-name">DDR Tracker</div>
         <div className="app-tag">Offshore Ops</div>
       </div>
       <nav className="nav">
-        <a className="on">
+        <a className={active === 'fleet' ? 'on' : ''} href="#" onClick={nav('fleet')}>
           <svg viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
           Fleet
         </a>
-        <a>
+        <a className={active === 'analytics' ? 'on' : ''} href="#" onClick={nav('analytics')}>
           <svg viewBox="0 0 24 24"><path d="M3 3v18h18M18.7 8l-5.1 5.2-2.8-2.8L7 14.3" /></svg>
           Analytics
         </a>
