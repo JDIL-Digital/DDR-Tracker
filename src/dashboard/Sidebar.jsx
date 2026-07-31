@@ -30,7 +30,7 @@ export default function Sidebar({ active = 'fleet', onNavigate = () => {} }) {
           <svg viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.6L19 8.4V19a2 2 0 01-2 2z" /></svg>
           Reports
         </a>
-        <a>
+        <a className={active === 'assets' ? 'on' : ''} href="#" onClick={nav('assets')}>
           <svg viewBox="0 0 24 24"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10m-8-4V7" /></svg>
           Assets
         </a>
