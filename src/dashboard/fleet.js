@@ -3,6 +3,7 @@
 // view model from real DDR data; anything absent is left null so the UI can show
 // "—" / "Awaiting" instead of inventing numbers.
 import { supabase } from '../lib/supabaseClient'
+import { cached } from './dataCache'
 
 // Known fleet roster (real Jindal rig names) so the page always shows the full
 // fleet. Metrics are NEVER taken from here — only names. A rig with no report
@@ -25,7 +26,7 @@ function drillMeterageOf(a) {
   return 0
 }
 
-export async function loadFleet(date) {
+async function _loadFleet(date) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
 
   const [rigsRes, codesRes, reportsRes] = await Promise.all([
@@ -201,4 +202,9 @@ export async function loadFleet(date) {
       awaiting: displayNames.length - reportsReceived,
     },
   }
+}
+
+// Cached wrapper — keyed by the selected date; dedupes StrictMode double-invoke.
+export function loadFleet(date) {
+  return cached('fleet', [date], () => _loadFleet(date))
 }

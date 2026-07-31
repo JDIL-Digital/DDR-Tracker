@@ -5,12 +5,14 @@ import TopBar from './TopBar'
 import FleetView from './FleetView'
 import AnalyticsView from './AnalyticsView'
 import ReportsView from './ReportsView'
+import AssetsView from './AssetsView'
+import SettingsView from './SettingsView'
 
 // App shell: owns theme + which page is active. The sidebar switches pages;
 // TopBar (with the light/dark toggle) and the theme are shared across pages.
 export default function Dashboard() {
   const [theme, setTheme] = useState('dark') // default DARK; session-only (no storage)
-  const [activeView, setActiveView] = useState('fleet') // 'fleet' | 'analytics' | 'reports'
+  const [activeView, setActiveView] = useState('fleet') // 'fleet' | 'analytics' | 'reports' | 'assets' | 'settings'
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -21,7 +23,17 @@ export default function Dashboard() {
       <Sidebar active={activeView} onNavigate={setActiveView} />
       <main className="main">
         <TopBar theme={theme} onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} />
-        {activeView === 'analytics' ? <AnalyticsView /> : activeView === 'reports' ? <ReportsView /> : <FleetView />}
+        {activeView === 'analytics' ? (
+          <AnalyticsView />
+        ) : activeView === 'reports' ? (
+          <ReportsView />
+        ) : activeView === 'assets' ? (
+          <AssetsView />
+        ) : activeView === 'settings' ? (
+          <SettingsView theme={theme} onSetTheme={setTheme} />
+        ) : (
+          <FleetView />
+        )}
       </main>
     </div>
   )
