@@ -4,6 +4,7 @@
 // stays absent so the UI can show honest "—"/empty states.
 import { supabase } from '../lib/supabaseClient'
 import { FLEET_ROSTER } from './fleet'
+import { cached } from './dataCache'
 
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
@@ -17,7 +18,7 @@ function drillMeterageOf(a) {
 // (repair / equipment / breakdown / maintenance) — not hardcoded.
 const EQUIP_RE = /repair|equipment|breakdown|maintenance/i
 
-export async function loadReports(start, end) {
+async function _loadReports(start, end) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
 
   const [rigsRes, codesRes] = await Promise.all([
@@ -100,4 +101,9 @@ export async function loadReports(start, end) {
   const equipCodeLabels = [...equipCodes].map((c) => `${c} ${codeMap.get(c)?.description || ''}`.trim())
 
   return { window: { start, end }, rigList, acts, reps, equipCodeLabels }
+}
+
+// Cached wrapper — keyed by the date window; dedupes StrictMode double-invoke.
+export function loadReports(start, end) {
+  return cached('reports', [start, end], () => _loadReports(start, end))
 }

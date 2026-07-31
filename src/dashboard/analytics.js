@@ -4,6 +4,7 @@
 import { supabase } from '../lib/supabaseClient'
 import { FLEET_ROSTER } from './fleet'
 import { clamp } from './format'
+import { cached, plannedRopSupported } from './dataCache'
 
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
@@ -20,34 +21,25 @@ export function healthColor(h) {
   return 'red'
 }
 
-export async function loadAnalytics(start, end) {
+async function _loadAnalytics(start, end) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
 
-  const [rigsRes, codesRes] = await Promise.all([
+  // Detect planned_rop support in parallel (memoized, no failing probe).
+  const [rigsRes, codesRes, hasPlanned] = await Promise.all([
     supabase.from('rigs').select('id, name, rig_type'),
     supabase.from('code_master').select('code, description, is_npt'),
+    plannedRopSupported(),
   ])
   if (rigsRes.error) throw new Error(rigsRes.error.message)
   if (codesRes.error) throw new Error(codesRes.error.message)
 
-  // reports for the window. planned_rop may not exist yet — fall back gracefully.
+  // Only select planned_rop when the column actually exists — no probe, no 400.
   const base = 'id, rig_id, report_date, depth_md_m, day_meterage_m, fuel_consumed_kl'
-  let hasPlanned = true
-  let repRes = await supabase
+  const repRes = await supabase
     .from('reports')
-    .select(`${base}, planned_rop`)
+    .select(hasPlanned ? `${base}, planned_rop` : base)
     .gte('report_date', start)
     .lte('report_date', end)
-  const missingCol =
-    repRes.error &&
-    (/planned_rop/i.test(repRes.error.message || '') ||
-      /planned_rop/i.test(repRes.error.details || '') ||
-      repRes.error.code === '42703' ||
-      repRes.error.code === 'PGRST204')
-  if (missingCol) {
-    hasPlanned = false
-    repRes = await supabase.from('reports').select(base).gte('report_date', start).lte('report_date', end)
-  }
   if (repRes.error) throw new Error(repRes.error.message)
 
   const rigs = rigsRes.data || []
@@ -161,4 +153,10 @@ export async function loadAnalytics(start, end) {
   })
 
   return { window: { start, end }, hasPlanned, rigs: rigViews }
+}
+
+// Cached wrapper: repeat tab switches (same window) return instantly and the
+// StrictMode double-invoke is deduped. Keyed by the date window.
+export function loadAnalytics(start, end) {
+  return cached('analytics', [start, end], () => _loadAnalytics(start, end))
 }
