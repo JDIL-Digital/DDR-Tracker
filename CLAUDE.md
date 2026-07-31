@@ -131,9 +131,21 @@ Assets / Settings), and can send a **daily summary email**. Everything is curren
    (a `plpgsql` `save_ddr_report()` called via `supabase.rpc`) to replace the non-atomic multi-step
    `saveReport()`.
 3. **Deploy to Replit.**
-4. **GTO feature** — upload the GTO, an extractor for it, an **Actual-vs-Planned Depth-vs-Days**
-   chart, and it fills the Assets **well/project** data (currently "pending GTO") and likely
-   **`planned_rop`** (Analytics target ROP auto-enables once that column exists).
+4. **Well Plan feature (formerly "GTO feature")** — upload a planning doc, an extractor for it, an
+   **Actual-vs-Planned Depth-vs-Days** chart, and it fills the Assets **well/project** data
+   (currently "pending GTO") and likely **`planned_rop`** (Analytics target ROP auto-enables once
+   that column exists). Design notes:
+   - The 6 rigs run **two operation types**: **EXPLORATORY** (receives a **GTO**) and **WORKOVER**
+     (receives a **well-data PDF**, ~50% similar to the GTO). Workover wells have **no GTO**.
+   - Both docs provide a **PLANNED depth-vs-days progression**; **actual** is measured from the DDRs
+     by date + depth.
+   - Build a **unified "Well Plan" feature**: one PDF upload accepting either a GTO or a well-data
+     PDF; each well tagged **Exploratory / Workover**; **one extractor** (tune on the GTO first, then
+     adjust for the well-data PDF); **one** Actual-vs-Planned Depth-vs-Days chart serving both; the
+     extracted well/project data fills the **Assets detail panel**.
+   - **OPEN QUESTIONS for next session:** obtain a **workover well-data PDF sample**; confirm whether
+     planned depth-vs-days is a **numeric table** (easy to extract) or **only a plotted curve** (hard);
+     confirm **how exploratory vs workover is identified** per well.
 5. **Aug-10 email-format tightening** — the standardized DDR emails start ~**10 Aug 2026**. Tighten
    the Gmail match rule + multi-attachment selection (which file is the daily report), and fix the
    **rig-name extraction** (Jindal Explorer file currently mis-extracts operator "ONGC OIM" as the
