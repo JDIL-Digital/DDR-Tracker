@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
-import { loadActivityCodes } from './settings'
+import { useAuth } from '../auth/AuthProvider'
+import { loadActivityCodes, loadProfiles, setProfileStatus } from './settings'
+import { prettyDate } from './format'
 
 const SECTIONS = [
   { key: 'general', label: 'General' },
@@ -24,6 +26,133 @@ function catClass(category) {
   if (category === 'Non-Productive') return 'cat-npt'
   if (category === 'Completion') return 'cat-comp'
   return 'cat-unk'
+}
+
+function StatusPill({ status }) {
+  return <span className={`spill s-${status}`}>{status}</span>
+}
+function RolePill({ role }) {
+  return <span className={`spill r-${role}`}>{role}</span>
+}
+
+// Admin Approvals — real approve/reject wired to the profiles table. Only an
+// approved admin can see or use this; RLS enforces the same on the server.
+function AdminApprovals() {
+  const { isAdmin, user, refreshProfile } = useAuth()
+  const [rows, setRows] = useState(null)
+  const [err, setErr] = useState(null)
+  const [busyId, setBusyId] = useState(null)
+
+  const load = useCallback(() => {
+    setErr(null)
+    loadProfiles()
+      .then(setRows)
+      .catch((e) => setErr(e.message))
+  }, [])
+
+  useEffect(() => {
+    if (isAdmin) load()
+  }, [isAdmin, load])
+
+  if (!isAdmin) {
+    return (
+      <div className="panel accent" style={{ '--k': 'var(--amber)' }}>
+        <h3>Admin Approvals</h3>
+        <div className="npt-empty">Admin only — your account can't manage approvals.</div>
+      </div>
+    )
+  }
+
+  async function act(id, status) {
+    setBusyId(id)
+    setErr(null)
+    try {
+      await setProfileStatus(id, status, user.id)
+      load()
+      if (id === user.id) refreshProfile() // acted on self -> refresh own gate
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const pending = (rows || []).filter((r) => r.status === 'pending')
+
+  return (
+    <div className="panel accent" style={{ '--k': 'var(--amber)' }}>
+      <h3>Admin Approvals</h3>
+      <div className="psub">Approve first-time logins · live from the profiles table</div>
+
+      {err && <div className="state err">Failed: {err}</div>}
+
+      {/* Pending queue */}
+      <div className="eyebrow" style={{ margin: '4px 0 8px' }}>Pending requests</div>
+      {!rows ? (
+        <div className="state">Loading…</div>
+      ) : pending.length === 0 ? (
+        <div className="npt-empty">No pending approvals.</div>
+      ) : (
+        <div className="matrix-scroll">
+          <table className="matrix">
+            <thead>
+              <tr><th>Email</th><th>Name</th><th>Requested</th><th className="ta-r">Actions</th></tr>
+            </thead>
+            <tbody>
+              {pending.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.email}</td>
+                  <td>{r.full_name || '—'}</td>
+                  <td>{r.created_at ? prettyDate(String(r.created_at).slice(0, 10)) : '—'}</td>
+                  <td className="ta-r">
+                    <button type="button" className="mini-btn approve" disabled={busyId === r.id} onClick={() => act(r.id, 'approved')}>Approve</button>
+                    <button type="button" className="mini-btn reject" disabled={busyId === r.id} onClick={() => act(r.id, 'rejected')}>Reject</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* All users */}
+      <div className="eyebrow" style={{ margin: '18px 0 8px' }}>All users</div>
+      {!rows ? (
+        <div className="state">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="npt-empty">No users yet.</div>
+      ) : (
+        <div className="matrix-scroll">
+          <table className="matrix">
+            <thead>
+              <tr><th>Email</th><th>Role</th><th>Status</th><th className="ta-r">Actions</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.email}{r.id === user.id ? <span className="you-tag">you</span> : null}</td>
+                  <td><RolePill role={r.role} /></td>
+                  <td><StatusPill status={r.status} /></td>
+                  <td className="ta-r">
+                    {r.status !== 'approved' && (
+                      <button type="button" className="mini-btn approve" disabled={busyId === r.id} onClick={() => act(r.id, 'approved')}>Approve</button>
+                    )}
+                    {r.status !== 'rejected' && (
+                      <button type="button" className="mini-btn reject" disabled={busyId === r.id} onClick={() => act(r.id, 'rejected')}>Reject</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="setting-note">
+        Approve grants dashboard access; Reject blocks it. Actions are recorded with your id and
+        timestamp, and enforced by row-level security (only admins can change status).
+      </div>
+    </div>
+  )
 }
 
 export default function SettingsView({ theme = 'dark', onSetTheme = () => {} }) {
@@ -132,17 +261,7 @@ export default function SettingsView({ theme = 'dark', onSetTheme = () => {} }) 
             </div>
           )}
 
-          {section === 'approvals' && (
-            <div className="panel accent" style={{ '--k': 'var(--amber)' }}>
-              <h3>Admin Approvals</h3>
-              <div className="psub">Pending approvals queue</div>
-              <div className="npt-empty">No pending approvals.</div>
-              <div className="setting-note">
-                First-time logins require admin approval before they can access data. Each pending user will appear here
-                with <strong>Approve</strong> / <strong>Reject</strong> actions — enforcement is wired in the authentication step.
-              </div>
-            </div>
-          )}
+          {section === 'approvals' && <AdminApprovals />}
 
           {section === 'codes' && (
             <div className="panel accent" style={{ '--k': 'var(--green)' }}>
