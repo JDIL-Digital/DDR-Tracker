@@ -1,6 +1,22 @@
-// Sidebar — brand, nav, user. Fleet + Analytics switch the active page; the
-// remaining items are static chrome for this local-only step.
+import { useAuth } from '../auth/AuthProvider'
+
+// Two-letter initials from a display name (falls back to the email local-part).
+function initialsOf(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean)
+  if (!parts.length) return '—'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+// Sidebar — brand, nav, user. The nav items switch the active page; the user
+// block shows the signed-in Google account and a sign-out action.
 export default function Sidebar({ active = 'fleet', onNavigate = () => {} }) {
+  const { user, signOut } = useAuth()
+  const meta = user?.user_metadata || {}
+  const email = user?.email || ''
+  const fullName = meta.full_name || meta.name || email.split('@')[0] || 'Signed in'
+  const initials = initialsOf(meta.full_name || meta.name || email)
+
   const nav = (view) => (e) => {
     e.preventDefault()
     onNavigate(view)
@@ -40,11 +56,20 @@ export default function Sidebar({ active = 'fleet', onNavigate = () => {} }) {
         </a>
       </nav>
       <div className="user">
-        <div className="av">AM</div>
-        <div>
-          <div className="nm">Akshay M.</div>
-          <div className="rl">Drilling Ops</div>
+        <div className="av">{initials}</div>
+        <div className="u-info">
+          <div className="nm" title={fullName}>{fullName}</div>
+          <div className="rl" title={email}>{email}</div>
         </div>
+        <button
+          type="button"
+          className="signout"
+          onClick={signOut}
+          aria-label="Sign out"
+          title="Sign out"
+        >
+          <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" /></svg>
+        </button>
       </div>
     </aside>
   )
