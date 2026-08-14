@@ -30,8 +30,7 @@ export default function Sidebar({ active = 'fleet', onNavigate = () => {} }) {
         <div className="logo-plate">
           <img className="logo-img" src="/Jindal%20Logo.jpg" alt="Jindal Drilling &amp; Industries Ltd." />
         </div>
-        <div className="app-name">DDR Tracker</div>
-        <div className="app-tag">Offshore Ops</div>
+        <div className="app-name wordmark">JDIL ORBIT</div>
       </div>
       <nav className="nav">
         <a className={active === 'fleet' ? 'on' : ''} href="#" onClick={nav('fleet')}>

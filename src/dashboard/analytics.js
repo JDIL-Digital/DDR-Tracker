@@ -2,7 +2,7 @@
 // Aggregates DDR data over a date window; anything absent stays null so the UI
 // shows "—" rather than fabricated numbers.
 import { supabase } from '../lib/supabaseClient'
-import { FLEET_ROSTER } from './fleet'
+import { FLEET_ROSTER, rigOrderMap, compareRigNames } from './fleet'
 import { clamp } from './format'
 import { cached, plannedRopSupported } from './dataCache'
 
@@ -26,7 +26,7 @@ async function _loadAnalytics(start, end) {
 
   // Detect planned_rop support in parallel (memoized, no failing probe).
   const [rigsRes, codesRes, hasPlanned] = await Promise.all([
-    supabase.from('rigs').select('id, name, rig_type'),
+    supabase.from('rigs').select('id, name, rig_type, sort_order'),
     supabase.from('code_master').select('code, description, is_npt'),
     plannedRopSupported(),
   ])
@@ -73,12 +73,12 @@ async function _loadAnalytics(start, end) {
     reportsByRig.get(rep.rig_id).push(rep)
   }
 
-  // Display fleet = roster first, then any DB rigs not in the roster.
+  // Display fleet = roster + any DB rigs not in the roster, in fixed fleet order.
   const rosterNorms = new Set(FLEET_ROSTER.map(norm))
   const displayNames = [
     ...FLEET_ROSTER,
     ...rigs.filter((r) => !rosterNorms.has(norm(r.name))).map((r) => r.name),
-  ]
+  ].sort(compareRigNames(rigOrderMap(rigs)))
 
   const rigViews = displayNames.map((name) => {
     const dbRig = rigByNorm.get(norm(name))
