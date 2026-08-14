@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import './dashboard.css'
+import ErrorBoundary from '../ErrorBoundary'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
 import FleetView from './FleetView'
@@ -19,17 +20,21 @@ export default function Dashboard({ theme, onSetTheme, onToggleTheme }) {
       <Sidebar active={activeView} onNavigate={setActiveView} />
       <main className="main">
         <TopBar theme={theme} onToggleTheme={onToggleTheme} />
-        {activeView === 'analytics' ? (
-          <AnalyticsView />
-        ) : activeView === 'reports' ? (
-          <ReportsView />
-        ) : activeView === 'assets' ? (
-          <AssetsView />
-        ) : activeView === 'settings' ? (
-          <SettingsView theme={theme} onSetTheme={onSetTheme} />
-        ) : (
-          <FleetView />
-        )}
+        {/* Per-view boundary: if one screen throws, the sidebar/topbar survive
+            and switching views (resetKey) auto-clears the error. */}
+        <ErrorBoundary level="panel" resetKey={activeView}>
+          {activeView === 'analytics' ? (
+            <AnalyticsView />
+          ) : activeView === 'reports' ? (
+            <ReportsView />
+          ) : activeView === 'assets' ? (
+            <AssetsView />
+          ) : activeView === 'settings' ? (
+            <SettingsView theme={theme} onSetTheme={onSetTheme} />
+          ) : (
+            <FleetView />
+          )}
+        </ErrorBoundary>
       </main>
     </div>
   )

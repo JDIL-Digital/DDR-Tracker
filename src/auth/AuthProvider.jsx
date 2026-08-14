@@ -66,12 +66,27 @@ export function AuthProvider({ children }) {
     }
 
     // Initial check (resolves the loading gate; avoids a login-screen flash for
-    // users who already have a valid session in storage).
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return
-      apply(data.session)
-      setLoading(false)
-    })
+    // users who already have a valid session in storage). If the check fails for
+    // any reason, fail safe to "no session" -> the login screen, never a hang.
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!active) return
+        if (error) {
+          setSession(null)
+          setUser(null)
+        } else {
+          apply(data.session)
+        }
+      })
+      .catch(() => {
+        if (!active) return
+        setSession(null)
+        setUser(null)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
 
     // Ongoing updates: sign-in redirect return, sign-out, token refresh.
     const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {

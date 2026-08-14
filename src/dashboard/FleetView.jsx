@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { loadFleet } from './fleet'
 import { todayISO, prettyDate, fmt1, fmtKl, pctNum } from './format'
+import { LoadError } from './LoadState'
 import KpiCard from './KpiCard'
 import RigCard from './RigCard'
 import RopChart from './RopChart'
@@ -14,6 +15,8 @@ export default function FleetView() {
   const [view, setView] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const retry = () => setReloadKey((k) => k + 1)
 
   useEffect(() => {
     let cancelled = false
@@ -24,7 +27,7 @@ export default function FleetView() {
       .catch((e) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [date])
+  }, [date, reloadKey])
 
   const k = view?.kpis
 
@@ -94,7 +97,7 @@ export default function FleetView() {
         </div>
 
         {error ? (
-          <div className="state err">Failed to load: {error}</div>
+          <LoadError message={error} onRetry={retry} />
         ) : !view ? (
           <div className="state">Loading fleet…</div>
         ) : (

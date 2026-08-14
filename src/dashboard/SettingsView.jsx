@@ -3,6 +3,7 @@ import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { useAuth } from '../auth/AuthProvider'
 import { loadActivityCodes, loadProfiles, setProfileStatus } from './settings'
 import { prettyDate } from './format'
+import { LoadError } from './LoadState'
 
 const SECTIONS = [
   { key: 'general', label: 'General' },
@@ -84,8 +85,10 @@ function AdminApprovals() {
       <h3>Admin Approvals</h3>
       <div className="psub">Approve first-time logins · live from the profiles table</div>
 
-      {err && <div className="state err">Failed: {err}</div>}
-
+      {err ? (
+        <LoadError message={err} onRetry={load} />
+      ) : (
+      <>
       {/* Pending queue */}
       <div className="eyebrow" style={{ margin: '4px 0 8px' }}>Pending requests</div>
       {!rows ? (
@@ -151,6 +154,8 @@ function AdminApprovals() {
         Approve grants dashboard access; Reject blocks it. Actions are recorded with your id and
         timestamp, and enforced by row-level security (only admins can change status).
       </div>
+      </>
+      )}
     </div>
   )
 }
@@ -178,6 +183,9 @@ export default function SettingsView({ theme = 'dark', onSetTheme = () => {} }) 
       .catch((e) => { if (!cancelled) setCodesErr(e.message) })
     return () => { cancelled = true }
   }, [section, codes, codesErr])
+
+  // Retry activity-codes load: clearing both re-satisfies the effect's guard.
+  const retryCodes = () => { setCodes(null); setCodesErr(null) }
 
   const addRecipient = () => {
     const e = newRecipient.trim()
@@ -268,7 +276,7 @@ export default function SettingsView({ theme = 'dark', onSetTheme = () => {} }) 
               <h3>Activity Codes</h3>
               <div className="psub">Live from code_master · view only (editing can come later)</div>
               {codesErr ? (
-                <div className="state err">Failed to load: {codesErr}</div>
+                <LoadError message={codesErr} onRetry={retryCodes} />
               ) : !codes ? (
                 <div className="state">Loading codes…</div>
               ) : (

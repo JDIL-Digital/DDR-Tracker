@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { loadReports } from './reports'
 import { todayISO, prettyDate, shiftDate } from './format'
+import { LoadError } from './LoadState'
 import ReportPeriodSelector from './ReportPeriodSelector'
 import RigCompareChips from './RigCompareChips'
 import RopTrendChart from './RopTrendChart'
@@ -27,6 +28,8 @@ export default function ReportsView() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const retry = () => setReloadKey((k) => k + 1)
   const [selected, setSelected] = useState(null) // Set<name> | null (null → all)
 
   const range = useMemo(() => computeRange(mode, customStart, customEnd), [mode, customStart, customEnd])
@@ -40,7 +43,7 @@ export default function ReportsView() {
       .catch((e) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [range.start, range.end])
+  }, [range.start, range.end, reloadKey])
 
   useEffect(() => {
     if (data && selected === null) setSelected(new Set(data.rigList.map((r) => r.name)))
@@ -160,7 +163,7 @@ export default function ReportsView() {
       </div>
 
       {error ? (
-        <div className="state err">Failed to load: {error}</div>
+        <LoadError message={error} onRetry={retry} />
       ) : !data || !view ? (
         <div className="state">Loading report…</div>
       ) : (

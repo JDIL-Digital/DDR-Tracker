@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { loadAssets } from './assets'
+import { LoadError } from './LoadState'
 import AssetsList from './AssetsList'
 import AssetDetail from './AssetDetail'
 
@@ -8,6 +9,8 @@ export default function AssetsView() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const retry = () => setReloadKey((k) => k + 1)
   const [openName, setOpenName] = useState(null)
 
   useEffect(() => {
@@ -19,7 +22,7 @@ export default function AssetsView() {
       .catch((e) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [])
+  }, [reloadKey])
 
   if (!isSupabaseConfigured) {
     return (
@@ -31,7 +34,7 @@ export default function AssetsView() {
       </div>
     )
   }
-  if (error) return <div className="wrap"><div className="state err">Failed to load: {error}</div></div>
+  if (error) return <div className="wrap"><LoadError message={error} onRetry={retry} /></div>
   if (!data || loading) return <div className="wrap"><div className="state">Loading assets…</div></div>
 
   const asset = openName ? data.assets.find((a) => a.name === openName) : null
