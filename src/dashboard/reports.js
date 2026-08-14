@@ -3,7 +3,7 @@
 // selected rigs and aggregates per panel. Nothing is fabricated — absent data
 // stays absent so the UI can show honest "—"/empty states.
 import { supabase } from '../lib/supabaseClient'
-import { FLEET_ROSTER } from './fleet'
+import { FLEET_ROSTER, rigOrderMap, compareRigNames } from './fleet'
 import { cached } from './dataCache'
 
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -22,7 +22,7 @@ async function _loadReports(start, end) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
 
   const [rigsRes, codesRes] = await Promise.all([
-    supabase.from('rigs').select('id, name'),
+    supabase.from('rigs').select('id, name, sort_order'),
     supabase.from('code_master').select('code, description, category, is_npt'),
   ])
   if (rigsRes.error) throw new Error(rigsRes.error.message)
@@ -94,7 +94,7 @@ async function _loadReports(start, end) {
   const displayNames = [
     ...FLEET_ROSTER,
     ...rigs.filter((r) => !rosterNorms.has(norm(r.name))).map((r) => r.name),
-  ]
+  ].sort(compareRigNames(rigOrderMap(rigs)))
   const withData = new Set(reps.map((r) => r.rig))
   const rigList = displayNames.map((name) => ({ name, hasData: withData.has(name) }))
 

@@ -4,7 +4,7 @@
 // downtime is LIVE from the repair/breakdown activity codes (same source as the
 // Reports downtime panel).
 import { supabase } from '../lib/supabaseClient'
-import { FLEET_ROSTER } from './fleet'
+import { FLEET_ROSTER, rigOrderMap, compareRigNames } from './fleet'
 import { cached } from './dataCache'
 import { todayISO, shiftDate } from './format'
 
@@ -26,7 +26,7 @@ async function _loadAssets() {
 
   const since = shiftDate(todayISO(), -ASSET_WINDOW_DAYS)
   const [rigsRes, codesRes, repRes] = await Promise.all([
-    supabase.from('rigs').select('id, name, rig_type, created_at'),
+    supabase.from('rigs').select('id, name, rig_type, created_at, sort_order'),
     supabase.from('code_master').select('code, description, is_npt'),
     supabase.from('reports').select('id, rig_id, report_date, well_no, depth_md_m').gte('report_date', since),
   ])
@@ -67,7 +67,7 @@ async function _loadAssets() {
   const displayNames = [
     ...FLEET_ROSTER,
     ...rigs.filter((r) => !rosterNorms.has(norm(r.name))).map((r) => r.name),
-  ]
+  ].sort(compareRigNames(rigOrderMap(rigs)))
 
   const assets = displayNames.map((name) => {
     const dbRig = rigByNorm.get(norm(name))

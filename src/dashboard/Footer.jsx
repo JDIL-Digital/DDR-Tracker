@@ -1,4 +1,6 @@
-// Footer — status legend + provenance disclaimer.
+// Footer — status legend (operating / standby / tripping / maintenance).
+// The "awaiting" indicator and the provenance disclaimer were removed per the
+// Fleet rework. Renders nothing when there's no active status to show.
 export default function Footer({ counts }) {
   const parts = []
   if (counts.operating) parts.push({ color: 'green', text: `${counts.operating} operating` })
@@ -10,7 +12,8 @@ export default function Footer({ counts }) {
     parts.push({ color: 'amber', text: bits.join(' · ') })
   }
   if (counts.maintenance) parts.push({ color: 'red', text: `${counts.maintenance} maintenance` })
-  if (counts.awaiting) parts.push({ color: 'dim', text: `${counts.awaiting} awaiting` })
+
+  if (!parts.length) return null
 
   return (
     <div className="foot-bar">
@@ -20,7 +23,6 @@ export default function Footer({ counts }) {
           {p.text}
         </span>
       ))}
-      <span className="disc">Live data from submitted DDRs · rigs without a report shown as Awaiting · no values invented</span>
     </div>
   )
 }
