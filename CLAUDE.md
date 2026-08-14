@@ -1,14 +1,19 @@
 # DDR Tracker — Project State / Handoff
 
-_Handoff notes so a future Claude Code session can continue this project. Last updated: 2026-07-30._
+_Handoff notes so a future Claude Code session can continue this project. Last updated: 2026-08-14._
 
 ## 1. What this project is
 **DDR Tracker** is an internal tool for **Jindal Drilling & Industries Ltd.** It standardizes
 **daily drilling reports (DDRs)** from **6 offshore rigs**. Reports arrive as Excel attachments by
 **Gmail**; the pipeline downloads them, uses the **Claude API** to extract each into standardized
 JSON, stores them in **Supabase**, presents a **fleet dashboard** (Fleet / Analytics / Reports /
-Assets / Settings), and can send a **daily summary email**. Everything is currently **local-only**
-(no deploy, no auth yet).
+Assets / Settings), and can send a **daily summary email**.
+
+**Deployment status (2026-08-14):** the **dashboard is LIVE on Replit** at
+**https://jdilorbit.replit.app** — a Vite SPA served as a **static build** (`dist/`). **Auth works
+live** (Google sign-in restricted to `@jindalmumbai.com` + admin-approval gate; RLS enforced). The
+**background pipeline is NOT deployed yet** — Gmail ingest, Claude extraction, and the daily summary
+email still run **manually via the Node scripts** (`scripts/*.js`) on a local machine.
 
 ## 2. Tech stack
 - **Front-end:** Vite + React (JavaScript, not TS). Dev server on `http://localhost:5173`.
@@ -20,7 +25,9 @@ Assets / Settings), and can send a **daily summary email**. Everything is curren
   — the npm build had advisories. Parsing is buffer-based (`XLSX.read`).
 - **Email intake:** **Gmail API** via `googleapis` (Desktop OAuth, loopback on port 4571).
 - **Email send:** **Resend** (`resend` SDK).
-- **Deploy target (future):** **Replit**.
+- **Deploy (LIVE):** **Replit** — https://jdilorbit.replit.app. The **front-end only** is deployed
+  as a **static Vite build** (`npm run build` → serve `dist/`). The Node **pipeline scripts are NOT
+  deployed** (still run manually — see §6.1).
 - ⚠️ **npm registry note:** this dev environment blocks `registry.npmjs.org`. `.npmrc` points npm
   at the **yarnpkg mirror** (`https://registry.yarnpkg.com`). Keep `.npmrc` for installs here; it
   can be removed on a normal network.
@@ -122,16 +129,30 @@ Assets / Settings), and can send a **daily summary email**. Everything is curren
   (logo referenced as `/Jindal%20Logo.jpg`; sample is `23-07-2026-HJ#1Z .xls` with a `#` and a
   trailing space). `.env.local` values may have a leading space after `=` (loaders trim it).
 
-## 6. NOT done / next steps (in order)
-1. **Authentication + RLS enforcement** — `jindalmumbai.com` login, **admin approval** of first-time
-   users (see the Settings → Admin Approvals placeholder), **OTP**. Then tighten RLS from
-   blanket-read to per-role/per-user, and wire Settings → User Management / Approvals to real data
-   (a `profiles` table).
-2. **Hardening pass** — React error boundaries, graceful failure states, and an **atomic-write RPC**
-   (a `plpgsql` `save_ddr_report()` called via `supabase.rpc`) to replace the non-atomic multi-step
-   `saveReport()`.
-3. **Deploy to Replit.**
-4. **Well Plan feature (formerly "GTO feature")** — upload a planning doc, an extractor for it, an
+## 6. Status of the roadmap
+
+### 6.0 DONE (was "next steps" — now shipped)
+- ✅ **Authentication + admin approval + RLS enforcement** — Google sign-in restricted to
+  `@jindalmumbai.com`; first-time users land on an **admin-approval gate** (pending/approved/rejected);
+  a bootstrap admin is idempotently guaranteed. RLS is **locked down**: data readable only by
+  authenticated **approved** users (anon/public read is closed). Migrations `0006` (profiles + trigger),
+  `0007` (idempotent bootstrap admin), `0008` (RLS lockdown). Settings → Admin Approvals is live.
+- ✅ **IADC code list** — official 75 codes + 13 benchmarks loaded (migration `0005`), with a
+  `condition` (RODR/NODR/EBDR) column; `is_npt = (condition = 'EBDR')`. Marked `review_status='draft'`
+  pending Jindal team confirmation.
+- ✅ **Hardening pass** — React **error boundaries** (`src/ErrorBoundary.jsx`, app-level + per-view),
+  **graceful fetch/retry** states on every screen (`src/dashboard/LoadState.jsx`), safe auth fallback,
+  and an **atomic-write RPC** `save_ddr_report(payload jsonb)` (migration `0009`) replacing the
+  non-atomic multi-step `saveReport()` (now calls `supabase.rpc`).
+- ✅ **Deploy (front-end)** — LIVE on Replit at **https://jdilorbit.replit.app** (static Vite build).
+
+### 6.1 NOT done / next steps (in order)
+1. **Deploy the background pipeline on a schedule** — Gmail ingest → extract → save, and the daily
+   summary email, currently run **manually** via `scripts/*.js` on a local machine. Host them
+   (Replit scheduled deployment / cron or equivalent) so ingestion + the daily email run
+   automatically. Needs the **secret** Supabase key + Gmail OAuth token available server-side (never
+   in the browser bundle).
+2. **Well Plan feature (formerly "GTO feature")** — upload a planning doc, an extractor for it, an
    **Actual-vs-Planned Depth-vs-Days** chart, and it fills the Assets **well/project** data
    (currently "pending GTO") and likely **`planned_rop`** (Analytics target ROP auto-enables once
    that column exists). Design notes:
@@ -146,13 +167,16 @@ Assets / Settings), and can send a **daily summary email**. Everything is curren
    - **OPEN QUESTIONS for next session:** obtain a **workover well-data PDF sample**; confirm whether
      planned depth-vs-days is a **numeric table** (easy to extract) or **only a plotted curve** (hard);
      confirm **how exploratory vs workover is identified** per well.
-5. **Aug-10 email-format tightening** — the standardized DDR emails start ~**10 Aug 2026**. Tighten
-   the Gmail match rule + multi-attachment selection (which file is the daily report), and fix the
-   **rig-name extraction** (Jindal Explorer file currently mis-extracts operator "ONGC OIM" as the
-   rig name). Adopt the **ONGC activity code list (R-2)** to finalize `code_master` (replacing the
-   draft `0002` codes).
-6. **Fields to request from the rig team** (currently missing → shown as `—`): **WOB, RPM, planned
-   ROP, well progress %, rig location**, and the **GTO** for authoritative well data.
+3. **Wire condition / ILT display** — surface the new IADC **condition (RODR/NODR/EBDR)** across the
+   UI (Settings → Activity Codes, Reports/Analytics groupings), and add **ILT** (Invisible Lost Time:
+   `actual − norm` over-run vs the `benchmarks` norms, contractually zero-paid) as a report metric.
+   Note the NPT semantics changed with the IADC load (`is_npt` = EBDR only) — reconcile the dashboard's
+   NPT views accordingly.
+4. **Aug-10 email-filter + new rig fields** — standardized DDR emails started ~**10 Aug 2026**.
+   Tighten the Gmail match rule + multi-attachment selection (which file is the daily report), fix the
+   **rig-name extraction** (Jindal Explorer file mis-extracts operator "ONGC OIM" as the rig name),
+   and add the **fields currently missing** (shown as `—`): **WOB, RPM, planned ROP, well progress %,
+   rig location** (request from the rig team / new standardized format).
 
 ## 7. How to run locally
 ```bash
