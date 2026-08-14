@@ -1,6 +1,6 @@
-// Login screen — shown whenever there is no valid Jindal session. Branded to
-// match the dashboard (logo plate, app name, CSS variables) and works in both
-// dark and light via the small toggle in the corner.
+// Login screen — shown whenever there is no valid Jindal session. Always renders
+// DARK (forced in CSS via a scoped dark palette on .login-wrap) so the rig photo
+// + frosted glass look right, regardless of the app's default theme.
 import { useAuth } from './AuthProvider'
 
 // Official Google "G" mark for the sign-in button (standard sign-in affordance).
@@ -44,8 +44,7 @@ export default function LoginScreen({ theme = 'dark', onToggleTheme = () => {} }
         <div className="logo-plate login-logo">
           <img className="logo-img" src="/Jindal%20Logo.jpg" alt="Jindal Drilling &amp; Industries Ltd." />
         </div>
-        <div className="login-title">DDR Tracker</div>
-        <div className="login-sub">Offshore Ops · Fleet Mission Control</div>
+        <div className="login-wordmark">JDIL ORBIT</div>
 
         {accessDenied && (
           <div className="login-error" role="alert">

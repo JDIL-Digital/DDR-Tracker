@@ -160,8 +160,13 @@ function AdminApprovals() {
   )
 }
 
-export default function SettingsView({ theme = 'dark', onSetTheme = () => {} }) {
-  const [section, setSection] = useState('general')
+export default function SettingsView({ theme = 'dark', onSetTheme = () => {}, codeFilter = null, onClearCodeFilter = () => {} }) {
+  const [section, setSection] = useState(codeFilter ? 'codes' : 'general')
+
+  // Arriving from the top-bar search on an activity code → open Activity Codes.
+  useEffect(() => {
+    if (codeFilter) setSection('codes')
+  }, [codeFilter])
 
   // General (session-only preferences for now — not persisted)
   const [defaultWindow, setDefaultWindow] = useState('30d')
@@ -186,6 +191,11 @@ export default function SettingsView({ theme = 'dark', onSetTheme = () => {} }) 
 
   // Retry activity-codes load: clearing both re-satisfies the effect's guard.
   const retryCodes = () => { setCodes(null); setCodesErr(null) }
+
+  // When a code was chosen from search, show just that code (with a clear chip).
+  const shownCodes = codes && codeFilter
+    ? codes.filter((c) => String(c.code).toLowerCase() === String(codeFilter).toLowerCase())
+    : codes
 
   const addRecipient = () => {
     const e = newRecipient.trim()
@@ -275,10 +285,19 @@ export default function SettingsView({ theme = 'dark', onSetTheme = () => {} }) 
             <div className="panel accent" style={{ '--k': 'var(--green)' }}>
               <h3>Activity Codes</h3>
               <div className="psub">Live from code_master · view only (editing can come later)</div>
+              {codeFilter && (
+                <div className="filter-chip">
+                  Filtered to code <span className="mono">{codeFilter}</span>
+                  <button type="button" className="x" onClick={onClearCodeFilter} aria-label="Clear code filter">×</button>
+                  <button type="button" className="linktext" onClick={onClearCodeFilter}>Show all codes</button>
+                </div>
+              )}
               {codesErr ? (
                 <LoadError message={codesErr} onRetry={retryCodes} />
               ) : !codes ? (
                 <div className="state">Loading codes…</div>
+              ) : shownCodes.length === 0 ? (
+                <div className="npt-empty">No activity code matches “{codeFilter}”.</div>
               ) : (
                 <div className="matrix-scroll">
                   <table className="matrix">
@@ -286,8 +305,8 @@ export default function SettingsView({ theme = 'dark', onSetTheme = () => {} }) 
                       <tr><th>Code</th><th>Description</th><th>Category</th><th>NPT flag</th></tr>
                     </thead>
                     <tbody>
-                      {codes.map((c) => (
-                        <tr key={c.code}>
+                      {shownCodes.map((c) => (
+                        <tr key={c.code} className={codeFilter ? 'row-highlight' : ''}>
                           <td className="mono">{c.code}</td>
                           <td>{c.description}</td>
                           <td><span className={`catpill ${catClass(c.category)}`}>{c.category || '—'}</span></td>

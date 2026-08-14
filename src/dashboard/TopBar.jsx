@@ -1,13 +1,12 @@
-// TopBar — search (static) on the left; the light/dark toggle + notifications
-// bell sit at the top-right (where "DDR MISSION CONTROL" used to be).
-export default function TopBar({ theme, onToggleTheme }) {
+import SearchBar from './SearchBar'
+
+// TopBar — functional search on the left; the light/dark toggle + notifications
+// bell sit at the top-right.
+export default function TopBar({ theme, onToggleTheme, onSearchNavigate = () => {} }) {
   const isDark = theme === 'dark'
   return (
     <div className="topbar">
-      <div className="search">
-        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
-        Search rigs, wells, or activity codes…
-      </div>
+      <SearchBar onNavigate={onSearchNavigate} />
       <div className="right">
         <button
           type="button"

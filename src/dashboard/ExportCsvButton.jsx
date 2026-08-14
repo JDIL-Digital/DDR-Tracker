@@ -6,7 +6,10 @@ function cell(v, dp) {
   return dp != null ? Number(v).toFixed(dp) : String(v)
 }
 function csvEscape(s) {
-  const str = String(s)
+  let str = String(s)
+  // Neutralize spreadsheet formula injection: a leading = + - @ makes Excel/Sheets
+  // treat the cell as a formula. Prefix with a single quote so it renders as text.
+  if (/^[=+\-@]/.test(str)) str = `'${str}`
   return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str
 }
 
