@@ -896,6 +896,77 @@ body {
 .state.err {
   color: var(--red);
 }
+/* Inline load-error with a Retry button (LoadState.jsx) */
+.state.err {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.state-err-msg {
+  color: var(--red);
+}
+.btn.retry {
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn.retry:hover:not(:disabled) {
+  border-color: var(--red);
+  color: #fff;
+  background: var(--red);
+}
+.btn.ghost {
+  background: transparent;
+}
+
+/* Error boundary fallback (ErrorBoundary.jsx) */
+.error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--text);
+}
+.error-boundary.eb-app {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: 24px;
+}
+.error-boundary.eb-panel {
+  margin: 22px 26px;
+  padding: 28px 22px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.eb-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--amber);
+  background: rgba(231, 165, 60, 0.16);
+  border: 1px solid rgba(231, 165, 60, 0.4);
+}
+.eb-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.eb-msg {
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 360px;
+}
+.eb-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
 
 /* ============ Analytics page ============ */
 .stack {

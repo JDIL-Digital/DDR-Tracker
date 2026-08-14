@@ -50,12 +50,13 @@ async function must(builder, label) {
 }
 
 /**
- * Persist an extracted DDR into Supabase.
+ * Persist an extracted DDR into Supabase — ATOMICALLY.
  *
- * Order of operations:
- *  a. find-or-create the rig by name
- *  b. upsert the report on (rig_id, report_date) so a re-run UPDATES in place
- *  c. clean-replace the child rows (delete then insert activities + inventory)
+ * The rig/report/activities/inventory write happens inside ONE database
+ * transaction via the save_ddr_report(payload jsonb) RPC (migration 0009). If
+ * any step fails, the whole write rolls back — there is no partial report. This
+ * module only builds a clean payload (code validation, extraction_status,
+ * nulling unknown codes); the RPC does all the DB work.
  *
  * @param {object} data              the JSON returned by extractDDR()
  * @param {object} opts
@@ -64,6 +65,10 @@ async function must(builder, label) {
  */
 export async function saveReport(data, { validationPassed }) {
   const supabase = getServerClient()
+
+  if (!data.rig_name || String(data.rig_name).trim() === '') {
+    throw new Error('rig_name is empty; cannot resolve a rig.')
+  }
 
   // Source-of-truth code list is the DB code_master (also what the FK enforces).
   const codeRows = await must(supabase.from('code_master').select('code'), 'load code_master')
@@ -78,115 +83,61 @@ export async function saveReport(data, { validationPassed }) {
   // extraction_status: 'ok' only if validation passed AND every code is known.
   const extractionStatus = validationPassed && unknownCodes.length === 0 ? 'ok' : 'needs_review'
 
+  // Build child rows (no report_id — the RPC assigns it). Unknown codes are
+  // nulled here so the RPC's insert is FK-safe.
+  const activityRows = activities.map((a, i) => ({
+    seq: i + 1,
+    time_from: a.time_from ?? null,
+    time_to: a.time_to ?? null,
+    hrs: a.hrs ?? null,
+    code: validCodes.has(a.code) ? a.code : null,
+    depth_in_m: a.depth_in_m ?? null,
+    depth_out_m: a.depth_out_m ?? null,
+    remarks: a.remarks ?? null,
+  }))
+  const inventoryRows = inventory.map((r) => ({
+    item: r.item ?? null,
+    unit: r.unit ?? null,
+    opening: r.opening ?? null,
+    received: r.received ?? null,
+    generated: r.generated ?? null,
+    consumed: r.consumed ?? null,
+    closing: r.closing ?? null,
+  }))
+
+  const payload = {
+    rig_name: data.rig_name,
+    well_no: data.well_no ?? null,
+    report_no: data.report_no ?? null,
+    report_date: data.report_date,
+    depth_md_m: data.depth_md_m ?? null,
+    day_meterage_m: data.day_meterage_m ?? null,
+    fuel_consumed_kl: data.fuel_consumed_kl ?? null,
+    extraction_status: extractionStatus,
+    raw_extract: data,
+    activities: activityRows,
+    inventory: inventoryRows,
+  }
+
   try {
-    // --- (a) rig: find or create --------------------------------------------
-    if (!data.rig_name || String(data.rig_name).trim() === '') {
-      throw new Error('rig_name is empty; cannot resolve a rig.')
-    }
-    let rigId
-    let rigCreated = false
-    const existingRig = await must(
-      supabase.from('rigs').select('id').eq('name', data.rig_name).maybeSingle(),
-      'look up rig'
-    )
-    if (existingRig) {
-      rigId = existingRig.id
-    } else {
-      const newRig = await must(
-        supabase.from('rigs').insert({ name: data.rig_name, rig_type: null }).select('id').single(),
-        'insert rig'
-      )
-      rigId = newRig.id
-      rigCreated = true
-    }
-
-    // --- (b) report: upsert on (rig_id, report_date) ------------------------
-    // Pre-check to report insert vs update (upsert alone doesn't tell us which).
-    const priorReport = await must(
-      supabase
-        .from('reports')
-        .select('id')
-        .eq('rig_id', rigId)
-        .eq('report_date', data.report_date)
-        .maybeSingle(),
-      'look up existing report'
-    )
-    const reportAction = priorReport ? 'updated' : 'inserted'
-
-    const reportRow = {
-      rig_id: rigId,
-      well_no: data.well_no ?? null,
-      report_no: data.report_no ?? null,
-      report_date: data.report_date,
-      depth_md_m: data.depth_md_m ?? null,
-      day_meterage_m: data.day_meterage_m ?? null,
-      fuel_consumed_kl: data.fuel_consumed_kl ?? null,
-      extraction_status: extractionStatus,
-      raw_extract: data,
-    }
-    const report = await must(
-      supabase
-        .from('reports')
-        .upsert(reportRow, { onConflict: 'rig_id,report_date' })
-        .select('id')
-        .single(),
-      'upsert report'
-    )
-    const reportId = report.id
-
-    // --- (c) children: clean replace ----------------------------------------
-    // Build the payloads BEFORE deleting, so a bad payload fails before we
-    // remove the old rows.
-    const activityRows = activities.map((a, i) => ({
-      report_id: reportId,
-      seq: i + 1,
-      time_from: a.time_from ?? null,
-      time_to: a.time_to ?? null,
-      hrs: a.hrs ?? null,
-      code: validCodes.has(a.code) ? a.code : null, // null unknown codes (keeps the row, FK-safe)
-      depth_in_m: a.depth_in_m ?? null,
-      depth_out_m: a.depth_out_m ?? null,
-      remarks: a.remarks ?? null,
-      // meterage_m is a GENERATED column — never inserted.
-    }))
-    const inventoryRows = inventory.map((r) => ({
-      report_id: reportId,
-      item: r.item ?? null,
-      unit: r.unit ?? null,
-      opening: r.opening ?? null,
-      received: r.received ?? null,
-      generated: r.generated ?? null,
-      consumed: r.consumed ?? null,
-      closing: r.closing ?? null,
-    }))
-
-    await must(supabase.from('activities').delete().eq('report_id', reportId), 'delete old activities')
-    await must(supabase.from('inventory').delete().eq('report_id', reportId), 'delete old inventory')
-
-    if (activityRows.length) {
-      await must(supabase.from('activities').insert(activityRows), 'insert activities')
-    }
-    if (inventoryRows.length) {
-      await must(supabase.from('inventory').insert(inventoryRows), 'insert inventory')
-    }
+    // One atomic call — all-or-nothing inside the DB.
+    const summary = await must(supabase.rpc('save_ddr_report', { payload }), 'save_ddr_report RPC')
 
     return {
       rigName: data.rig_name,
-      rigId,
-      rigCreated,
-      reportId,
-      reportAction,
-      activitiesWritten: activityRows.length,
-      inventoryWritten: inventoryRows.length,
+      rigId: summary.rig_id,
+      rigCreated: summary.rig_created,
+      reportId: summary.report_id,
+      reportAction: summary.report_action,
+      activitiesWritten: summary.activities_written,
+      inventoryWritten: summary.inventory_written,
       nulledCodeCount: activityRows.filter((r) => r.code === null).length,
       unknownCodes,
       extractionStatus,
     }
   } catch (err) {
-    // Note: supabase-js has no client-side multi-table transaction. Every step
-    // here is idempotent (find-or-create rig, upsert report, delete+insert
-    // children), so re-running --save heals a partially-applied write. We still
-    // surface the failure loudly rather than pretending it succeeded.
-    throw new Error(`saveReport aborted (DB may be partially updated; re-run --save to heal): ${err.message}`)
+    // The RPC is atomic: on failure the transaction rolled back, so the DB is
+    // unchanged (no partial write). Fix the cause and re-run --save.
+    throw new Error(`saveReport failed (atomic RPC rolled back — no partial write; fix and re-run --save): ${err.message}`)
   }
 }
