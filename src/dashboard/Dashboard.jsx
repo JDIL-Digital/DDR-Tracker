@@ -14,12 +14,28 @@ import SettingsView from './SettingsView'
 // and the theme are shared across pages.
 export default function Dashboard({ theme, onSetTheme, onToggleTheme }) {
   const [activeView, setActiveView] = useState('fleet') // 'fleet' | 'analytics' | 'reports' | 'assets' | 'settings'
+  const [highlightRig, setHighlightRig] = useState(null) // rig to highlight on Fleet (from search)
+  const [codeFilter, setCodeFilter] = useState(null)     // activity code to filter in Settings (from search)
+
+  // Sidebar / manual nav clears any search-driven highlight/filter.
+  const navigate = (view) => {
+    setHighlightRig(null)
+    setCodeFilter(null)
+    setActiveView(view)
+  }
+
+  // Top-bar search selections.
+  const onSearchNavigate = (item) => {
+    if (item.type === 'rig') { setCodeFilter(null); setHighlightRig(item.name); setActiveView('fleet') }
+    else if (item.type === 'well') { setCodeFilter(null); setHighlightRig(item.rig); setActiveView('fleet') }
+    else if (item.type === 'code') { setHighlightRig(null); setCodeFilter(item.code); setActiveView('settings') }
+  }
 
   return (
     <div className="app">
-      <Sidebar active={activeView} onNavigate={setActiveView} />
+      <Sidebar active={activeView} onNavigate={navigate} />
       <main className="main">
-        <TopBar theme={theme} onToggleTheme={onToggleTheme} />
+        <TopBar theme={theme} onToggleTheme={onToggleTheme} onSearchNavigate={onSearchNavigate} />
         {/* Per-view boundary: if one screen throws, the sidebar/topbar survive
             and switching views (resetKey) auto-clears the error. */}
         <ErrorBoundary level="panel" resetKey={activeView}>
@@ -30,9 +46,9 @@ export default function Dashboard({ theme, onSetTheme, onToggleTheme }) {
           ) : activeView === 'assets' ? (
             <AssetsView />
           ) : activeView === 'settings' ? (
-            <SettingsView theme={theme} onSetTheme={onSetTheme} />
+            <SettingsView theme={theme} onSetTheme={onSetTheme} codeFilter={codeFilter} onClearCodeFilter={() => setCodeFilter(null)} />
           ) : (
-            <FleetView />
+            <FleetView highlightRig={highlightRig} />
           )}
         </ErrorBoundary>
       </main>

@@ -17,7 +17,7 @@ const RANK = {
   diesel: { key: 'dieselRob', label: 'Total Diesel ROB' },
 }
 
-export default function FleetView() {
+export default function FleetView({ highlightRig = null }) {
   const [date, setDate] = useState(todayISO())
   const [view, setView] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -41,6 +41,13 @@ export default function FleetView() {
   }, [date, reloadKey])
 
   const k = view?.kpis
+
+  // When arriving via search, scroll the highlighted rig card into view.
+  useEffect(() => {
+    if (!highlightRig || !view) return
+    const el = document.querySelector(`[data-rig="${highlightRig.replace(/"/g, '\\"')}"]`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [highlightRig, view])
 
   // Rig cards, optionally ranked by the active metric (highest first; missing → last).
   const rigsToShow = useMemo(() => {
@@ -138,7 +145,7 @@ export default function FleetView() {
           <>
             <div className="rigs">
               {rigsToShow.map((r) => (
-                <RigCard key={r.name} rig={r} />
+                <RigCard key={r.name} rig={r} highlighted={r.name === highlightRig} />
               ))}
             </div>
             <div className="bottom">

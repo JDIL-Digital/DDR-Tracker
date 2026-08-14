@@ -3,7 +3,10 @@ import { ASSET_CATEGORIES } from './assets'
 import { prettyDate, DASH } from './format'
 
 function csvCell(v) {
-  const s = String(v ?? '')
+  let s = String(v ?? '')
+  // Neutralize spreadsheet formula injection: a leading = + - @ makes Excel/Sheets
+  // treat the cell as a formula. Prefix with a single quote so it renders as text.
+  if (/^[=+\-@]/.test(s)) s = `'${s}`
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 function downloadCsv(filename, text) {

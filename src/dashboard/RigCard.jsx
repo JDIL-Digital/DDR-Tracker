@@ -6,10 +6,11 @@ const fmtDepth = (n) => (n == null ? DASH : `${Number(n).toLocaleString('en-US')
 const fmtRop = (n) => (n == null ? DASH : Number(n).toFixed(1))
 const fmtNpt = (n) => (n == null ? DASH : `${Math.round(n)}%`)
 
-export default function RigCard({ rig }) {
+export default function RigCard({ rig, highlighted = false }) {
+  const cls = `rig${highlighted ? ' rig-highlight' : ''}`
   if (!rig.hasReport) {
     return (
-      <div className="rig">
+      <div className={cls} data-rig={rig.name}>
         <div className="hd">
           <div className="top">
             <div className="name">{rig.name}</div>
@@ -24,7 +25,7 @@ export default function RigCard({ rig }) {
   }
 
   return (
-    <div className="rig">
+    <div className={cls} data-rig={rig.name}>
       <div className="hd">
         <div className="top">
           <div className="name">{rig.name}</div>

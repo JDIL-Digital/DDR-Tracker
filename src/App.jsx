@@ -42,9 +42,10 @@ function Gate({ theme, onSetTheme, onToggleTheme }) {
 }
 
 // App owns the theme now (was Dashboard), so the login screen and splash are
-// themed too. Default DARK; session-only (no storage).
+// themed too. Default LIGHT for every user/session; the top-bar toggle still
+// lets a user switch to dark during their session (session-only, no storage).
 function App() {
-  const [theme, setTheme] = useState('dark')
+  const [theme, setTheme] = useState('light')
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
