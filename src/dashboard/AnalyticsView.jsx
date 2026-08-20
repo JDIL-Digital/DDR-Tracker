@@ -5,10 +5,15 @@ import { todayISO, prettyDate, shiftDate } from './format'
 import { LoadError } from './LoadState'
 import TimeWindowSelector from './TimeWindowSelector'
 import RigCompareChips from './RigCompareChips'
-import RopByRigChart from './RopByRigChart'
+import ILTTrendChart from './ILTTrendChart'
 import NptByCausePanel from './NptByCausePanel'
-import DieselVsDepthScatter from './DieselVsDepthScatter'
+import ActualVsPlannedDays from './ActualVsPlannedDays'
 import FleetPerformanceMatrix from './FleetPerformanceMatrix'
+import WellLocationPanel from './WellLocationPanel'
+
+// Stable per-rig line colors (assigned by roster position so a rig keeps its
+// color regardless of which rigs are selected).
+const RIG_COLORS = ['#1fb55e', '#3e8fe0', '#e7a53c', '#f04a42', '#7b3ff2', '#17a2a2', '#d81b8c', '#8a95a1']
 
 function computeRange(mode, cs, ce) {
   const end = mode === 'custom' ? ce : todayISO()
@@ -63,15 +68,13 @@ export default function AnalyticsView() {
     })
 
   // Derived views over the selected rigs
-  const ropChart = shown.map((r) => ({ label: r.name, actual: r.avgRop, target: r.target }))
-  const hasTarget = !!data?.hasPlanned && shown.some((r) => r.target != null)
+  const colorOf = (name) => RIG_COLORS[Math.max(0, allNames.indexOf(name)) % RIG_COLORS.length]
+  const iltSeries = shown.map((r) => ({ name: r.name, color: colorOf(r.name), points: r.iltSeries || [] }))
 
   const nptMap = new Map()
   for (const r of shown) for (const c of r.nptCauses || []) nptMap.set(c.label, (nptMap.get(c.label) || 0) + c.hours)
   const nptItems = [...nptMap.entries()].map(([label, hours]) => ({ label, hours })).sort((a, b) => b.hours - a.hours)
   const nptTotal = nptItems.reduce((s, i) => s + i.hours, 0)
-
-  const scatter = shown.flatMap((r) => (r.scatter || []).map((p) => ({ ...p, rig: r.name })))
 
   if (!isSupabaseConfigured) {
     return (
@@ -109,12 +112,13 @@ export default function AnalyticsView() {
       ) : (
         <>
           <div className="bottom">
-            <RopByRigChart data={ropChart} hasTarget={hasTarget} />
+            <ILTTrendChart series={iltSeries} />
             <NptByCausePanel total={nptTotal} items={nptItems} />
           </div>
           <div className="stack">
-            <DieselVsDepthScatter points={scatter} />
+            <ActualVsPlannedDays />
             <FleetPerformanceMatrix rows={shown} />
+            <WellLocationPanel rigs={shown.map((r) => r.name)} />
           </div>
         </>
       )}
