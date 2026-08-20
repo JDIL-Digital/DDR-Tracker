@@ -4,13 +4,14 @@ import { useAuth } from '../auth/AuthProvider'
 import { loadActivityCodes, loadProfiles, setProfileStatus } from './settings'
 import { prettyDate } from './format'
 import { LoadError } from './LoadState'
+import WellPlansPanel from './WellPlansPanel'
 
 const SECTIONS = [
   { key: 'general', label: 'General' },
   { key: 'users', label: 'User Management' },
   { key: 'approvals', label: 'Admin Approvals' },
   { key: 'codes', label: 'Activity Codes' },
-  { key: 'gto', label: 'GTO Uploads' },
+  { key: 'wellplans', label: 'Well Plans' },
   { key: 'notifications', label: 'Notifications' },
 ]
 
@@ -321,12 +322,7 @@ export default function SettingsView({ theme = 'dark', onSetTheme = () => {}, co
             </div>
           )}
 
-          {section === 'gto' && (
-            <div className="panel accent" style={{ '--k': 'var(--blue)' }}>
-              <h3>GTO Uploads</h3>
-              <div className="pending-gto">GTO upload — coming soon. Well/project data (block, well type, target/water depth) will be uploaded here in the GTO feature.</div>
-            </div>
-          )}
+          {section === 'wellplans' && <WellPlansPanel />}
 
           {section === 'notifications' && (
             <div className="panel">
