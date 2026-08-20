@@ -1,6 +1,6 @@
 # DDR Tracker — Project State / Handoff
 
-_Handoff notes so a future Claude Code session can continue this project. Last updated: 2026-08-14._
+_Handoff notes so a future Claude Code session can continue this project. Last updated: 2026-08-20._
 
 ## 1. What this project is
 **DDR Tracker** is an internal tool for **Jindal Drilling & Industries Ltd.** It standardizes
@@ -9,11 +9,12 @@ _Handoff notes so a future Claude Code session can continue this project. Last u
 JSON, stores them in **Supabase**, presents a **fleet dashboard** (Fleet / Analytics / Reports /
 Assets / Settings), and can send a **daily summary email**.
 
-**Deployment status (2026-08-14):** the **dashboard is LIVE on Replit** at
+**Deployment status (2026-08-20):** the **dashboard is LIVE on Replit** at
 **https://jdilorbit.replit.app** — a Vite SPA served as a **static build** (`dist/`). **Auth works
 live** (Google sign-in restricted to `@jindalmumbai.com` + admin-approval gate; RLS enforced). The
-**background pipeline is NOT deployed yet** — Gmail ingest, Claude extraction, and the daily summary
-email still run **manually via the Node scripts** (`scripts/*.js`) on a local machine.
+**background pipeline is NOT deployed yet** — Gmail ingest, DDR extraction, the daily summary email,
+and the **well-plan extractor** all still run **manually via the Node scripts** (`scripts/*.js`) on a
+local machine.
 
 ## 2. Tech stack
 - **Front-end:** Vite + React (JavaScript, not TS). Dev server on `http://localhost:5173`.
@@ -145,38 +146,51 @@ email still run **manually via the Node scripts** (`scripts/*.js`) on a local ma
   and an **atomic-write RPC** `save_ddr_report(payload jsonb)` (migration `0009`) replacing the
   non-atomic multi-step `saveReport()` (now calls `supabase.rpc`).
 - ✅ **Deploy (front-end)** — LIVE on Replit at **https://jdilorbit.replit.app** (static Vite build).
+- ✅ **Security hardening (migration `0011`)** — the `@jindalmumbai.com` rule is enforced **server-side**
+  in `handle_new_user` (non-Jindal signups auto-`rejected`), the `SECURITY DEFINER` bootstrap helpers
+  are locked down (`revoke execute` from public/anon/authenticated), `is_admin()` no longer granted to
+  anon. Plus: CSV export formula-injection fix, and `npm audit` clean.
+- ✅ **Well Plan feature — upload + management + document extractor** (migrations `0012`/`0013`).
+  Admin uploads a GTO / well-data **PDF or DOCX** in **Settings → Well Plans** → stored in the private
+  **`well-plans`** Storage bucket + a `well_plans` row. Admin **edit/delete** (deletes the row AND the
+  Storage file — no orphans) and a **detail view** with a signed-URL file link. **Extractor**
+  `scripts/extract-wellplan.js` (server-side, SERVICE + Anthropic keys) reads the doc (`mammoth` for
+  DOCX, `pdf-parse` for PDF), Claude structured-output extracts **target depth, total planned days,
+  planned_milestones[], well_history, key_notes**, and writes them back (`extraction_status` =
+  extracted/needs_review/failed). The detail view renders the extracted milestones table / history /
+  notes. **Runs manually via CLI** (`node scripts/extract-wellplan.js <well_plan_id> --save`) — not
+  deployed. RLS: reads = any approved user, writes = **admins only**; bucket private.
+  Verified end-to-end on the real **IN#2** workover DOCX (32 planned days, 14 milestones).
+- ✅ **Analytics rework** — replaced the ROP-vs-target chart with an **ILT (Invisible Lost Time) trend**
+  (per-rig daily `sum(max(0, actual_hrs − benchmark_norm))`, honest empty state), and added the
+  **"Actual vs Planned Days"** + **"Well & Location"** placeholders (wired to Well Plan data next).
+- ✅ **Fleet rework + branding/search** — **JDIL ORBIT** rainbow wordmark (sidebar + login), **light**
+  default theme, **functional top-bar search** (rigs/wells/activity codes → navigate/highlight),
+  premium glass login over the rig photo, ODR/NODR/EBDR clickable KPI cards, monthly downtime-per-rig
+  chart, and a **fixed fleet display order** (migration `0010`, `rigs.sort_order`) used everywhere.
 
 ### 6.1 NOT done / next steps (in order)
-1. **Deploy the background pipeline on a schedule** — Gmail ingest → extract → save, and the daily
-   summary email, currently run **manually** via `scripts/*.js` on a local machine. Host them
-   (Replit scheduled deployment / cron or equivalent) so ingestion + the daily email run
-   automatically. Needs the **secret** Supabase key + Gmail OAuth token available server-side (never
-   in the browser bundle).
-2. **Well Plan feature (formerly "GTO feature")** — upload a planning doc, an extractor for it, an
-   **Actual-vs-Planned Depth-vs-Days** chart, and it fills the Assets **well/project** data
-   (currently "pending GTO") and likely **`planned_rop`** (Analytics target ROP auto-enables once
-   that column exists). Design notes:
-   - The 6 rigs run **two operation types**: **EXPLORATORY** (receives a **GTO**) and **WORKOVER**
-     (receives a **well-data PDF**, ~50% similar to the GTO). Workover wells have **no GTO**.
-   - Both docs provide a **PLANNED depth-vs-days progression**; **actual** is measured from the DDRs
-     by date + depth.
-   - Build a **unified "Well Plan" feature**: one PDF upload accepting either a GTO or a well-data
-     PDF; each well tagged **Exploratory / Workover**; **one extractor** (tune on the GTO first, then
-     adjust for the well-data PDF); **one** Actual-vs-Planned Depth-vs-Days chart serving both; the
-     extracted well/project data fills the **Assets detail panel**.
-   - **OPEN QUESTIONS for next session:** obtain a **workover well-data PDF sample**; confirm whether
-     planned depth-vs-days is a **numeric table** (easy to extract) or **only a plotted curve** (hard);
-     confirm **how exploratory vs workover is identified** per well.
-3. **Wire condition / ILT display** — surface the new IADC **condition (RODR/NODR/EBDR)** across the
-   UI (Settings → Activity Codes, Reports/Analytics groupings), and add **ILT** (Invisible Lost Time:
-   `actual − norm` over-run vs the `benchmarks` norms, contractually zero-paid) as a report metric.
-   Note the NPT semantics changed with the IADC load (`is_npt` = EBDR only) — reconcile the dashboard's
-   NPT views accordingly.
-4. **Aug-10 email-filter + new rig fields** — standardized DDR emails started ~**10 Aug 2026**.
-   Tighten the Gmail match rule + multi-attachment selection (which file is the daily report), fix the
-   **rig-name extraction** (Jindal Explorer file mis-extracts operator "ONGC OIM" as the rig name),
-   and add the **fields currently missing** (shown as `—`): **WOB, RPM, planned ROP, well progress %,
-   rig location** (request from the rig team / new standardized format).
+1. **Wire extracted planned days into the "Actual vs Planned Days" chart** (Analytics). The Well Plan
+   extractor now produces `planned_milestones[]` (step/planned_days/cumulative_days) + `total_planned_days`
+   on `well_plans`. Turn the current **"Actual vs Planned Days"** placeholder into a real chart:
+   **planned** cumulative-days curve from the milestones vs **actual** days-on-well/depth from the DDRs.
+   Also feed the Assets detail panel + likely **`planned_rop`** from the plan.
+2. **Test GTO (exploratory) extraction on the plotted-curve case.** The extractor is verified on the
+   **workover DOCX** (IN#2). Now run it on a **GTO**: its planned depth-vs-days is often **only a plotted
+   curve** (not a numeric table), so confirm what text/phase totals are actually extractable, and tune
+   the prompt for the GTO layout. Do **not** fabricate a curve — extract phase/step day totals + target
+   depth only. (Open: obtain a GTO sample; confirm how exploratory vs workover is tagged per well.)
+3. **Deploy the background pipeline on a schedule** — Gmail ingest → extract → save, the daily summary
+   email, and (now) the well-plan extractor currently run **manually** via `scripts/*.js` on a local
+   machine. Host them (Replit scheduled deployment / cron or equivalent) so ingestion + the daily email
+   run automatically. Needs the **secret** Supabase key + Gmail OAuth token + Anthropic key available
+   server-side (never in the browser bundle).
+4. **Aug-10 items** — standardized DPR emails started ~**10 Aug 2026**. (a) Tighten the **Gmail match
+   rule** + multi-attachment selection (which file is the daily report), and fix the **rig-name
+   extraction** (Jindal Explorer file mis-extracts operator "ONGC OIM" as the rig name). (b) Add the
+   **new DPR fields** currently shown as `—`: **WOB, RPM, planned ROP, OIM, well, platform**. (c) Get the
+   **Jindal team review of the RODR/NODR/EBDR draft** classification (currently `review_status='draft'`)
+   and flip confirmed codes.
 
 ## 7. How to run locally
 ```bash
