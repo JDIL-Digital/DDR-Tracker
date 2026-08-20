@@ -75,10 +75,15 @@ async function docToText(buffer, fileName) {
     return { text: value || '', kind: 'docx' }
   }
   if (ext === 'pdf') {
-    // Import the lib file directly to avoid pdf-parse's debug/test-file block.
-    const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default
-    const data = await pdfParse(buffer)
-    return { text: data.text || '', kind: 'pdf' }
+    // pdf-parse v2 is class-based: new PDFParse({ data }).getText().
+    const { PDFParse } = await import('pdf-parse')
+    const parser = new PDFParse({ data: new Uint8Array(buffer) })
+    try {
+      const res = await parser.getText()
+      return { text: res?.text || '', kind: 'pdf' }
+    } finally {
+      await parser.destroy?.()
+    }
   }
   throw new Error(`Unsupported file type ".${ext}" (only .pdf and .docx).`)
 }
