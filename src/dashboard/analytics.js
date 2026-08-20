@@ -25,13 +25,18 @@ async function _loadAnalytics(start, end) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
 
   // Detect planned_rop support in parallel (memoized, no failing probe).
-  const [rigsRes, codesRes, hasPlanned] = await Promise.all([
+  const [rigsRes, codesRes, benchRes, hasPlanned] = await Promise.all([
     supabase.from('rigs').select('id, name, rig_type, sort_order'),
     supabase.from('code_master').select('code, description, is_npt'),
+    supabase.from('benchmarks').select('iadc_code, norm_value, norm_unit'),
     plannedRopSupported(),
   ])
   if (rigsRes.error) throw new Error(rigsRes.error.message)
   if (codesRes.error) throw new Error(codesRes.error.message)
+  // Benchmarks are optional (feature may not be seeded yet) — treat a fetch error
+  // as "no benchmarks" so ILT shows its honest empty state instead of breaking
+  // the whole Analytics page.
+  const benchmarks = benchRes.error ? [] : benchRes.data || []
 
   // Only select planned_rop when the column actually exists — no probe, no 400.
   const base = 'id, rig_id, report_date, depth_md_m, day_meterage_m, fuel_consumed_kl'
@@ -61,6 +66,18 @@ async function _loadAnalytics(start, end) {
   const drillingCodes = new Set(codes.filter((c) => /drilling/i.test(c.description)).map((c) => c.code))
   const codeDesc = new Map(codes.map((c) => [c.code, c.description]))
 
+  // Benchmark norm per IADC code, in HOURS. A code can have several benchmark
+  // rows (per operation) — we take the tightest (minimum) hour-norm as a
+  // first-pass. 'stand/hr' benchmarks are excluded: their unit isn't hours, so
+  // they can't be compared to logged activity hours for ILT. (Refine to
+  // per-operation matching when activity granularity supports it.)
+  const normByCode = new Map()
+  for (const b of benchmarks) {
+    if (b.norm_unit !== 'hr' || b.iadc_code == null || b.norm_value == null) continue
+    const cur = normByCode.get(b.iadc_code)
+    if (cur == null || b.norm_value < cur) normByCode.set(b.iadc_code, b.norm_value)
+  }
+
   const rigByNorm = new Map(rigs.map((r) => [norm(r.name), r]))
   const actsByReport = new Map()
   for (const a of activities) {
@@ -84,7 +101,7 @@ async function _loadAnalytics(start, end) {
     const dbRig = rigByNorm.get(norm(name))
     const reps = dbRig ? reportsByRig.get(dbRig.id) || [] : []
     if (reps.length === 0) {
-      return { name, hasData: false, nptCauses: [], scatter: [] }
+      return { name, hasData: false, nptCauses: [], scatter: [], iltSeries: [] }
     }
 
     let totalHours = 0
@@ -96,6 +113,7 @@ async function _loadAnalytics(start, end) {
     let target = null
     const nptCauseMap = new Map()
     const scatter = []
+    const iltByDate = new Map() // report_date -> ILT hours (over benchmark)
 
     // latest report (max report_date) for "current depth"
     const latest = reps.reduce((a, b) => (a.report_date >= b.report_date ? a : b))
@@ -117,6 +135,12 @@ async function _loadAnalytics(start, end) {
           drillHours += a.hrs || 0
           drillMeterage += drillMeterageOf(a)
         }
+        // ILT: only benchmarked (hour-norm) codes contribute; over-run only.
+        const bnorm = normByCode.get(a.code)
+        if (bnorm != null && a.hrs != null) {
+          const ilt = Math.max(0, a.hrs - bnorm)
+          if (ilt > 0) iltByDate.set(rep.report_date, (iltByDate.get(rep.report_date) || 0) + ilt)
+        }
       }
       if (rep.fuel_consumed_kl != null) { fuelConsumed += rep.fuel_consumed_kl; fuelSeen = true }
       if (hasPlanned && rep.planned_rop != null) target = rep.planned_rop
@@ -134,6 +158,9 @@ async function _loadAnalytics(start, end) {
       nptPct != null ? clamp(Math.round(100 - nptPct * 0.6 - ropShortfallPct * 0.4), 0, 100) : null
 
     const nptCauses = [...nptCauseMap.entries()].map(([label, hours]) => ({ label, hours }))
+    const iltSeries = [...iltByDate.entries()]
+      .map(([date, hours]) => ({ date, hours }))
+      .sort((a, b) => a.date.localeCompare(b.date))
 
     return {
       name,
@@ -149,6 +176,7 @@ async function _loadAnalytics(start, end) {
       healthColor: healthColor(health),
       nptCauses,
       scatter,
+      iltSeries,
     }
   })
 
