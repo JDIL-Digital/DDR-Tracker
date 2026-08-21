@@ -17,15 +17,21 @@
 // and target depth from the text, never a fabricated curve. Missing values stay
 // null; a thin document is marked needs_review rather than invented.
 
-import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import mammoth from 'mammoth'
+import { PDFParse } from 'pdf-parse'
 import { getServerClient } from './supabase-server.js'
 
-const MODEL = 'claude-haiku-4-5'
+// DOCX has a real text layer → text extraction (cheap Haiku). PDFs (GTOs) use
+// custom fonts that CIPHER the digits in the text layer, so we render the page
+// and read it with VISION (Sonnet). Routing is by FILE TYPE, so future uploads
+// auto-use the right method.
+const MODEL_TEXT = 'claude-haiku-4-5'
+const MODEL_VISION = 'claude-sonnet-5'
 const BUCKET = 'well-plans'
 const MAX_DOC_CHARS = 40000
+const RENDER_SCALE = 2 // ~1568px long edge after the API downscale — good for small numbers
 
 // --- Structured-output JSON schema ------------------------------------------
 const num = { type: ['number', 'null'] }
@@ -67,20 +73,53 @@ const SCHEMA = {
   ],
 }
 
-// --- Read the document to plain text ----------------------------------------
-async function docToText(buffer, fileName) {
-  const ext = String(fileName || '').split('.').pop().toLowerCase()
-  if (ext === 'docx') {
-    const { value } = await mammoth.extractRawText({ buffer })
-    return { text: value || '', kind: 'docx' }
+// --- DOCX -> plain text ------------------------------------------------------
+async function docxToText(buffer) {
+  const { value } = await mammoth.extractRawText({ buffer })
+  return value || ''
+}
+
+// --- PDF -> rendered page PNG(s) (pdf-parse@2 / pdfjs, no extra native deps) --
+async function rasterizePdf(buffer) {
+  const parser = new PDFParse({ data: new Uint8Array(buffer) })
+  try {
+    const shot = await parser.getScreenshot({ scale: RENDER_SCALE })
+    return (shot?.pages || []).map((p) => {
+      const url = String(p.dataUrl)
+      return {
+        media_type: url.slice(5, url.indexOf(';')) || 'image/png', // e.g. image/png
+        base64: url.slice(url.indexOf(',') + 1),
+      }
+    })
+  } finally {
+    await parser.destroy?.()
   }
-  if (ext === 'pdf') {
-    // Import the lib file directly to avoid pdf-parse's debug/test-file block.
-    const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default
-    const data = await pdfParse(buffer)
-    return { text: data.text || '', kind: 'pdf' }
-  }
-  throw new Error(`Unsupported file type ".${ext}" (only .pdf and .docx).`)
+}
+
+// Vision prompt — read the VISIBLE numbers from the rendered page (the PDF text
+// layer is ciphered and must NOT be trusted).
+function buildVisionPrompt(row) {
+  return [
+    'You are extracting an offshore WELL PLAN (a GTO for exploratory, or a well-data doc) into JSON.',
+    'You are given the RENDERED PAGE IMAGE(S). Read the VISIBLE text and numbers. The PDF text layer',
+    'is unreliable (custom fonts cipher the digits), so trust ONLY what you can see in the image.',
+    '',
+    'CRITICAL: read numbers exactly as they appear. Do NOT guess numbers you cannot see — use null.',
+    '',
+    'Look for the PHASE SUMMARY BOX near the depth-vs-days plot, listing phase day-totals such as',
+    '"Rig Move - N Days", "Drilling - N Days", "Logging - N Days", "PT (NN Objs) - N Days",',
+    '"Abandonment - N Days", and "Total - N Days". Read those exact numbers.',
+    '',
+    `Known metadata (from upload): well_name=${JSON.stringify(row.well_name)}, well_type=${JSON.stringify(row.well_type)}.`,
+    '',
+    'FIELDS: well_name; well_type (exploratory|workover|sidetrack); target_depth_m (metres, as shown);',
+    'total_planned_days (the "Total ... Days" figure); planned_milestones (ordered phases: step_no,',
+    'description SHORT, planned_days, cumulative_days — prefer the summary-box phases for the day',
+    'totals); well_history (concise summary of history/nearby-wells/complications, or null); key_notes',
+    '(short string array — mud system, pressures, cores, logging days, H2S, VSP, etc.; [] if none).',
+    '',
+    'Return ONLY what the page shows. Never fabricate a number or a curve.',
+  ].join('\n')
 }
 
 function buildPrompt(docText, kind, row) {
@@ -134,29 +173,55 @@ export async function extractWellPlan(id) {
   if (dl.error) throw new Error(`download from ${BUCKET} failed: ${dl.error.message}`)
   const buffer = Buffer.from(await dl.data.arrayBuffer())
 
-  const { text, kind } = await docToText(buffer, row.source_file_name)
-  if (!text.trim()) throw new Error('Document produced no extractable text (scanned image PDF?).')
-
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not found in .env.local')
   const client = new Anthropic({ apiKey })
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
-    temperature: 0,
-    system:
-      'You are a meticulous data-extraction engine for offshore well plans (GTO / well-data docs). ' +
-      'Return only what the source supports; never fabricate values or curves.',
-    messages: [{ role: 'user', content: buildPrompt(text, kind, row) }],
-    output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-  })
+  const ext = String(row.source_file_name || '').split('.').pop().toLowerCase()
+  let response
+  let method
+  let detail
+
+  if (ext === 'docx') {
+    // Real text layer → text extraction (Haiku).
+    const text = await docxToText(buffer)
+    if (!text.trim()) throw new Error('DOCX produced no extractable text.')
+    method = 'text'
+    detail = `${text.length} chars`
+    response = await client.messages.create({
+      model: MODEL_TEXT,
+      max_tokens: 8000,
+      temperature: 0,
+      system: 'You are a meticulous data-extraction engine for offshore well plans. Return only what the source supports; never fabricate values or curves.',
+      messages: [{ role: 'user', content: buildPrompt(text, 'docx', row) }],
+      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
+    })
+  } else if (ext === 'pdf') {
+    // Ciphered text layer → render the page and read it with vision (Sonnet).
+    const pages = await rasterizePdf(buffer)
+    if (!pages.length) throw new Error('No pages rendered from the PDF (scanned/broken file?).')
+    method = 'vision'
+    detail = `${pages.length} page(s) @ scale ${RENDER_SCALE}`
+    const content = [
+      { type: 'text', text: buildVisionPrompt(row) },
+      ...pages.map((pg) => ({ type: 'image', source: { type: 'base64', media_type: pg.media_type, data: pg.base64 } })),
+    ]
+    response = await client.messages.create({
+      model: MODEL_VISION,
+      max_tokens: 8000, // no temperature — deprecated on Claude 5 models
+      system: 'You are a meticulous vision data-extraction engine for offshore well plans. Read only the numbers visible on the rendered page; never fabricate.',
+      messages: [{ role: 'user', content }],
+      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
+    })
+  } else {
+    throw new Error(`Unsupported file type ".${ext}" (only .pdf and .docx).`)
+  }
 
   const textBlock = response.content.find((b) => b.type === 'text')
   if (!textBlock) throw new Error('No text block in model response.')
   const result = JSON.parse(textBlock.text)
 
-  return { row, result, docKind: kind, docChars: text.length }
+  return { row, result, method, detail }
 }
 
 // Decide the status honestly from what came back.
@@ -210,9 +275,9 @@ async function main() {
   console.log(`Well plan  : ${id}`)
   console.log(`Mode       : ${doSave ? 'SAVE (writing to well_plans)' : 'DRY RUN (print only) — pass --save to write'}`)
 
-  let result, row, docKind, docChars
+  let result, row, method, detail
   try {
-    ({ result, row, docKind, docChars } = await extractWellPlan(id))
+    ({ result, row, method, detail } = await extractWellPlan(id))
   } catch (err) {
     console.error('\nEXTRACTION FAILED:', err.message)
     if (doSave) {
@@ -224,7 +289,7 @@ async function main() {
 
   const status = statusFor(result)
 
-  console.log(`File       : ${row.source_file_name} (${docKind}, ${docChars} chars of text)`)
+  console.log(`File       : ${row.source_file_name}  ·  method: ${method} (${detail})`)
   console.log('\n===================== EXTRACTED JSON =====================')
   console.log(JSON.stringify(result, null, 2))
 
