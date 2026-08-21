@@ -46,7 +46,7 @@ export async function loadWellPlans() {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
   const { data, error } = await supabase
     .from('well_plans')
-    .select('id, well_name, well_type, source_file_name, source_file_path, extraction_status, created_at, rig_id, target_depth_m, planned_milestones, well_history, raw_extract, rigs(name)')
+    .select('id, well_name, well_type, source_file_name, source_file_path, extraction_status, created_at, rig_id, target_depth_m, planned_milestones, planned_depth_points, depths_verified, well_history, raw_extract, rigs(name)')
     .order('created_at', { ascending: false })
   if (error) throw new Error(error.message)
   return (data || []).map((r) => ({ ...r, rig_name: r.rigs?.name || null }))
@@ -60,6 +60,29 @@ export async function updateWellPlan(id, { rigId, wellName, wellType }) {
   const { error } = await supabase
     .from('well_plans')
     .update({ rig_id: rigId || null, well_name: wellName?.trim() || null, well_type: wellType })
+    .eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+// Save admin-verified planned depth points (Depth-vs-Days Part 1). Writes the
+// edited points array and flips depths_verified=true — the chart (Part 2) only
+// trusts depths once this flag is set. Admins only (RLS "admin update well_plans").
+export async function updateWellPlanDepths(id, points) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  const clean = (Array.isArray(points) ? points : []).map((p) => ({
+    activity: p.activity?.trim() || null,
+    // Blank / non-numeric depth stays null — never coerced to 0.
+    planned_depth_m: p.planned_depth_m === '' || p.planned_depth_m == null || Number.isNaN(Number(p.planned_depth_m))
+      ? null : Number(p.planned_depth_m),
+    phase_days: p.phase_days === '' || p.phase_days == null || Number.isNaN(Number(p.phase_days))
+      ? null : Number(p.phase_days),
+    cumulative_days: p.cumulative_days === '' || p.cumulative_days == null || Number.isNaN(Number(p.cumulative_days))
+      ? null : Number(p.cumulative_days),
+    depth_confidence: p.depth_confidence || 'high', // admin-verified defaults to high
+  }))
+  const { error } = await supabase
+    .from('well_plans')
+    .update({ planned_depth_points: clean, depths_verified: true })
     .eq('id', id)
   if (error) throw new Error(error.message)
 }

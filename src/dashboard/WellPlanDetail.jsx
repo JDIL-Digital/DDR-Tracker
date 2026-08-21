@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { updateWellPlan, signedUrlForPlan } from './settings'
+import { updateWellPlan, updateWellPlanDepths, signedUrlForPlan } from './settings'
 import { prettyDate } from './format'
+
+const CONFIDENCES = ['low', 'medium', 'high']
 
 const WELL_TYPES = ['exploratory', 'workover', 'sidetrack']
 function statusClass(s) {
@@ -115,7 +117,7 @@ export default function WellPlanDetail({ plan, rigs, isAdmin, initialEditing = f
           </div>
 
           <div className="eyebrow" style={{ margin: '18px 0 6px' }}>Extracted details</div>
-          <ExtractedDetails plan={plan} />
+          <ExtractedDetails plan={plan} isAdmin={isAdmin} onSaved={onSaved} />
         </>
       )}
     </div>
@@ -125,7 +127,7 @@ export default function WellPlanDetail({ plan, rigs, isAdmin, initialEditing = f
 // The extracted plan data — shown when extraction_status = 'extracted'. Honest
 // empty / needs-review / failed states otherwise. total_planned_days + key_notes
 // live in raw_extract; milestones / history / target are their own columns.
-function ExtractedDetails({ plan }) {
+function ExtractedDetails({ plan, isAdmin, onSaved }) {
   const status = plan.extraction_status
   if (status === 'uploaded') {
     return <div className="pending-gto">Pending extraction — run the well-plan extractor on this row to populate planned days, milestones, well history, and key notes.</div>
@@ -177,6 +179,8 @@ function ExtractedDetails({ plan }) {
         </div>
       )}
 
+      <DepthPointsSection plan={plan} isAdmin={isAdmin} onSaved={onSaved} />
+
       <div className="eyebrow" style={{ margin: '14px 0 6px' }}>Well history</div>
       {plan.well_history ? (
         <div className="wp-history">{plan.well_history}</div>
@@ -193,5 +197,167 @@ function ExtractedDetails({ plan }) {
         </ul>
       )}
     </div>
+  )
+}
+
+// Planned DEPTH-vs-DAYS milestone points (Depth-vs-Days chart, Part 1).
+// Depths are LOW-confidence draft reads off the GTO curve — an admin verifies /
+// edits them here, then Save flips depths_verified=true. Non-admins see it
+// read-only. Days are the reliable summary-box values.
+function DepthPointsSection({ plan, isAdmin, onSaved }) {
+  const source = Array.isArray(plan.planned_depth_points) ? plan.planned_depth_points : []
+  const verified = !!plan.depths_verified
+
+  const [editing, setEditing] = useState(false)
+  const [rows, setRows] = useState(source)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const startEdit = () => {
+    // Fresh copy so cancel discards edits cleanly.
+    setRows(source.map((p) => ({
+      activity: p.activity ?? '',
+      planned_depth_m: p.planned_depth_m ?? '',
+      phase_days: p.phase_days ?? '', // preserved (not edited here), passed through on save
+      cumulative_days: p.cumulative_days ?? '',
+      depth_confidence: p.depth_confidence ?? 'high',
+    })))
+    setMsg(null)
+    setEditing(true)
+  }
+
+  const setCell = (i, key, val) => {
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [key]: val } : r)))
+  }
+  const addRow = () => setRows((rs) => [...rs, { activity: '', planned_depth_m: '', phase_days: '', cumulative_days: '', depth_confidence: 'high' }])
+  const removeRow = (i) => setRows((rs) => rs.filter((_, idx) => idx !== i))
+
+  async function save() {
+    setSaving(true)
+    setMsg(null)
+    try {
+      await updateWellPlanDepths(plan.id, rows)
+      setEditing(false)
+      await onSaved?.()
+    } catch (e) {
+      setMsg({ type: 'err', text: e.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const header = (
+    <div className="sec-h" style={{ margin: '18px 0 6px' }}>
+      <div className="eyebrow" style={{ margin: 0 }}>Planned depth points (Depth-vs-Days)</div>
+      {isAdmin && !editing && (
+        <button type="button" className="btn" onClick={startEdit}>
+          {source.length ? 'Edit / verify depths' : 'Add depth points'}
+        </button>
+      )}
+    </div>
+  )
+
+  // Banner: draft (unverified) vs verified. Draft is a hard warning.
+  const banner = verified ? (
+    <div className="setting-note" style={{ marginTop: 0 }}>
+      ✅ Depths <b>verified</b> against the GTO by an admin. Safe for the Depth-vs-Days chart.
+    </div>
+  ) : (
+    <div className="wp-msg err" style={{ display: 'block', marginTop: 0 }}>
+      ⚠️ DRAFT — these depths were auto-read off the GTO curve at low confidence.
+      <b> Verify them against the GTO before trusting.</b> The chart will not use them until verified.
+    </div>
+  )
+
+  // --- Read-only view (non-admin, or admin not editing) ---
+  if (!editing) {
+    return (
+      <>
+        {header}
+        {banner}
+        {source.length === 0 ? (
+          <div className="npt-empty">No planned depth points extracted{isAdmin ? ' — add them from the GTO curve.' : '.'}</div>
+        ) : (
+          <div className="matrix-scroll">
+            <table className="matrix">
+              <thead>
+                <tr>
+                  <th>Activity</th>
+                  <th className="num">Planned depth (m)</th>
+                  <th className="num">Cumulative days</th>
+                  <th>Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {source.map((p, i) => (
+                  <tr key={i}>
+                    <td>{p.activity || '—'}</td>
+                    <td className="num mono">{p.planned_depth_m != null ? p.planned_depth_m : '—'}</td>
+                    <td className="num mono">{p.cumulative_days != null ? p.cumulative_days : '—'}</td>
+                    <td><span className={`spill ${verified ? 's-approved' : 's-pending'}`}>{p.depth_confidence || '—'}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // --- Editable view (admin) ---
+  return (
+    <>
+      {header}
+      <div className="wp-msg err" style={{ display: 'block', marginTop: 0 }}>
+        ⚠️ DRAFT — verify each depth against the GTO before saving. Leave a depth blank if it is not
+        readable on the plot (blank stays empty — never guessed). Saving marks the depths <b>verified</b>.
+      </div>
+      <div className="matrix-scroll" style={{ marginTop: 8 }}>
+        <table className="matrix">
+          <thead>
+            <tr>
+              <th>Activity</th>
+              <th className="num">Planned depth (m)</th>
+              <th className="num">Cumulative days</th>
+              <th>Confidence</th>
+              <th aria-label="remove" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td>
+                  <input type="text" value={r.activity} onChange={(e) => setCell(i, 'activity', e.target.value)} placeholder="e.g. Drilling 12¼&quot;" style={{ width: '100%' }} />
+                </td>
+                <td className="num">
+                  <input type="number" step="any" value={r.planned_depth_m} onChange={(e) => setCell(i, 'planned_depth_m', e.target.value)} placeholder="blank if unreadable" style={{ width: '9em' }} />
+                </td>
+                <td className="num">
+                  <input type="number" step="any" value={r.cumulative_days} onChange={(e) => setCell(i, 'cumulative_days', e.target.value)} style={{ width: '6em' }} />
+                </td>
+                <td>
+                  <select value={r.depth_confidence} onChange={(e) => setCell(i, 'depth_confidence', e.target.value)}>
+                    {CONFIDENCES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </td>
+                <td>
+                  <button type="button" className="btn danger" onClick={() => removeRow(i)}>✕</button>
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={5} className="npt-empty">No points yet — add one from the GTO curve.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="wp-actions" style={{ marginTop: 10 }}>
+        <button type="button" className="btn" onClick={addRow}>+ Add point</button>
+        <button type="button" className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save & mark verified'}</button>
+        <button type="button" className="btn" onClick={() => { setEditing(false); setMsg(null) }}>Cancel</button>
+        {msg && <span className={`wp-msg ${msg.type}`}>{msg.text}</span>}
+      </div>
+    </>
   )
 }
