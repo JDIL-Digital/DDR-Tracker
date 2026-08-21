@@ -316,12 +316,14 @@ branch (not `main`).
   `repair|equipment|breakdown|maintenance` (currently code **22**), NOT invented MTBF.
 - **git / branch state at handoff (2026-08-21):** `main` has everything in §6.0 (through the
   **vision extractor**) merged + this handoff commit. Open branches:
-  - **`feat/actual-vs-planned`** — has **UNCOMMITTED** working-tree changes: the **days-based
-    Actual-vs-Planned table/chart** (loader well-plan matching in `analytics.js`, `ActualVsPlannedDays.jsx`
-    rewrite, CSS). It was **stashed** during this handoff and restored after. ⚠️ **A new session should
-    `git status` / `git stash list` and DECIDE:** this days-based work may be **superseded** by the
-    **Depth-vs-Days** direction (§6.1) — keep the loader's well-plan matching, but the panel will be
-    reworked into the depth chart. Do NOT assume it's final.
+  - **`feat/actual-vs-planned`** + a **`git stash`** — the **days-based Actual-vs-Planned table/chart**
+    (loader well-plan matching in `analytics.js`, `ActualVsPlannedDays.jsx` rewrite, `AnalyticsView.jsx`,
+    CSS). This handoff left the working tree on **`main`** (clean, current handoff doc), so that work is
+    **held in `stash@{0}`** (message: "wip: days-based actual-vs-planned…"). ⚠️ **A new session should
+    run `git stash list` and DECIDE:** `git stash pop` to restore it (onto `main` or after
+    `git checkout feat/actual-vs-planned`). This days-based work may be **superseded** by the
+    **Depth-vs-Days** direction (§6.1) — keep the loader's well-plan matching (it's reusable), but the
+    panel gets reworked into the depth chart. Do NOT assume it's final; it was never committed.
   - **`fix/wellplan-pdf-parser`** — the standalone pdf-parse-v2 text fix; **now REDUNDANT** (superseded
     by the vision merge, which routes PDFs away from the text path). **Close that PR** if still open.
   - Everything else is merged to `main`.
