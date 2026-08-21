@@ -25,18 +25,22 @@ async function _loadAnalytics(start, end) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
 
   // Detect planned_rop support in parallel (memoized, no failing probe).
-  const [rigsRes, codesRes, benchRes, hasPlanned] = await Promise.all([
+  const [rigsRes, codesRes, benchRes, wpRes, hasPlanned] = await Promise.all([
     supabase.from('rigs').select('id, name, rig_type, sort_order'),
     supabase.from('code_master').select('code, description, is_npt'),
     supabase.from('benchmarks').select('iadc_code, norm_value, norm_unit'),
+    supabase.from('well_plans')
+      .select('rig_id, well_name, extraction_status, depths_verified, planned_depth_points, target_depth_m, raw_extract, created_at')
+      .eq('extraction_status', 'extracted'),
     plannedRopSupported(),
   ])
   if (rigsRes.error) throw new Error(rigsRes.error.message)
   if (codesRes.error) throw new Error(codesRes.error.message)
-  // Benchmarks are optional (feature may not be seeded yet) — treat a fetch error
-  // as "no benchmarks" so ILT shows its honest empty state instead of breaking
+  // Benchmarks + well_plans are optional (features may not be seeded yet) — treat
+  // a fetch error as "none" so the honest empty states show instead of breaking
   // the whole Analytics page.
   const benchmarks = benchRes.error ? [] : benchRes.data || []
+  const wellPlans = wpRes.error ? [] : wpRes.data || []
 
   // Only select planned_rop when the column actually exists — no probe, no 400.
   const base = 'id, rig_id, report_date, depth_md_m, day_meterage_m, fuel_consumed_kl'
@@ -90,6 +94,28 @@ async function _loadAnalytics(start, end) {
     reportsByRig.get(rep.rig_id).push(rep)
   }
 
+  // --- Well plans → per-rig verified DEPTH plan (Depth-vs-Days chart) ----------
+  // Match a plan to a rig by rig_id, most-recent first. We track two things per
+  // rig: whether ANY extracted plan exists (to distinguish "no plan" from "plan
+  // but depths not verified"), and the most-recent plan whose depths an admin has
+  // VERIFIED (depths_verified=true + non-empty points) — only those drive the chart.
+  const anyPlanRigIds = new Set()
+  const depthPlanByRigId = new Map()
+  const sortedWP = [...wellPlans].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+  for (const wp of sortedWP) {
+    if (wp.rig_id) anyPlanRigIds.add(wp.rig_id)
+    const pts = Array.isArray(wp.planned_depth_points) ? wp.planned_depth_points : []
+    if (wp.depths_verified && pts.length && wp.rig_id && !depthPlanByRigId.has(wp.rig_id)) {
+      depthPlanByRigId.set(wp.rig_id, {
+        wellName: wp.well_name || null,
+        targetDepthM: wp.target_depth_m ?? null,
+        totalPlannedDays: wp.raw_extract?.total_planned_days ?? null,
+        points: pts, // verified {activity, planned_depth_m, phase_days, cumulative_days, depth_confidence}
+        milestones: Array.isArray(wp.raw_extract?.planned_milestones) ? wp.raw_extract.planned_milestones : [],
+      })
+    }
+  }
+
   // Display fleet = roster + any DB rigs not in the roster, in fixed fleet order.
   const rosterNorms = new Set(FLEET_ROSTER.map(norm))
   const displayNames = [
@@ -100,8 +126,11 @@ async function _loadAnalytics(start, end) {
   const rigViews = displayNames.map((name) => {
     const dbRig = rigByNorm.get(norm(name))
     const reps = dbRig ? reportsByRig.get(dbRig.id) || [] : []
+    // Depth plan status is independent of whether the rig has DDRs yet.
+    const depthPlan = dbRig ? depthPlanByRigId.get(dbRig.id) || null : null
+    const hasAnyPlan = dbRig ? anyPlanRigIds.has(dbRig.id) : false
     if (reps.length === 0) {
-      return { name, hasData: false, nptCauses: [], scatter: [], iltSeries: [] }
+      return { name, hasData: false, nptCauses: [], scatter: [], iltSeries: [], depthPlan, hasAnyPlan }
     }
 
     let totalHours = 0
@@ -177,6 +206,8 @@ async function _loadAnalytics(start, end) {
       nptCauses,
       scatter,
       iltSeries,
+      depthPlan,
+      hasAnyPlan,
     }
   })
 

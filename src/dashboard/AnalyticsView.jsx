@@ -7,7 +7,7 @@ import TimeWindowSelector from './TimeWindowSelector'
 import RigCompareChips from './RigCompareChips'
 import ILTTrendChart from './ILTTrendChart'
 import NptByCausePanel from './NptByCausePanel'
-import ActualVsPlannedDays from './ActualVsPlannedDays'
+import DepthVsDaysChart from './DepthVsDaysChart'
 import FleetPerformanceMatrix from './FleetPerformanceMatrix'
 import WellLocationPanel from './WellLocationPanel'
 
@@ -116,7 +116,7 @@ export default function AnalyticsView() {
             <NptByCausePanel total={nptTotal} items={nptItems} />
           </div>
           <div className="stack">
-            <ActualVsPlannedDays />
+            <DepthVsDaysChart rigs={data.rigs} />
             <FleetPerformanceMatrix rows={shown} />
             <WellLocationPanel rigs={shown.map((r) => r.name)} />
           </div>

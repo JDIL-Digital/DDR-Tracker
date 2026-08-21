@@ -1273,6 +1273,15 @@ body {
 .scatter .axlbl { fill: var(--muted); font-size: 11px; }
 .scatter .pt { fill: var(--amber); stroke: var(--card); stroke-width: 1.5; }
 
+/* depth-vs-days chart */
+.depth-planned-line { stroke: var(--dim); stroke-width: 2.5; }
+.depth-planned-dot { fill: var(--dim); stroke: var(--panel); stroke-width: 1.5; }
+.depth-caption { font-size: 12px; color: var(--muted); margin: 2px 0 10px; }
+.depth-caption b { color: var(--text); font-weight: 600; }
+.depth-legend { margin-top: 10px; }
+.depth-rig-picker { font-size: 12px; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--border2); background: var(--panel); color: var(--text); }
+.depth-table-scroll { max-height: 420px; overflow: auto; margin-top: 2px; }
+
 /* performance matrix */
 .matrix-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .matrix-scroll { overflow-x: auto; }
