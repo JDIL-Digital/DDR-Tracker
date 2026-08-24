@@ -1282,6 +1282,26 @@ body {
 .depth-rig-picker { font-size: 12px; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--border2); background: var(--panel); color: var(--text); }
 .depth-table-scroll { max-height: 420px; overflow: auto; margin-top: 2px; }
 
+/* DMR / maintenance */
+.dept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.dept-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: var(--panel); }
+.dept-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.dept-name { font-weight: 700; font-size: 14px; color: var(--text); }
+.dept-chief { font-size: 12px; color: var(--muted); }
+.dept-chief b { color: var(--text); font-weight: 600; }
+.dept-sub { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); font-weight: 600; margin: 12px 0 6px; }
+.dmr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dmr-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+.dmr-list.planned li { color: var(--muted); }
+.dmr-list.planned li::before { content: "•"; color: var(--dim); margin-right: 2px; }
+.dmr-text { flex: 1; min-width: 0; }
+.dmr-status-sel { font-size: 11px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border2); background: var(--panel); color: var(--text); flex: 0 0 auto; }
+.dmr-status-sel.s-approved { color: var(--green); border-color: rgba(31,181,94,0.4); }
+.dmr-status-sel.s-pending { color: var(--amber); border-color: rgba(231,165,60,0.4); }
+.npt-empty.sm { font-size: 12px; padding: 6px 0; }
+.rollup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.embedded-assets .wrap { padding: 0; max-width: none; }
+
 /* performance matrix */
 .matrix-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .matrix-scroll { overflow-x: auto; }
