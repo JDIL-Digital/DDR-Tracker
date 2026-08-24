@@ -1302,6 +1302,24 @@ body {
 .rollup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .embedded-assets .wrap { padding: 0; max-width: none; }
 
+/* DMR key highlights (two-tier) */
+.highlights-box { margin-top: 16px; border: 1px solid var(--border2); border-radius: 12px; padding: 14px 16px; background: var(--card); }
+.hi-head { font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+.hi-list { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.hi-list + .hi-list { margin-top: 6px; }
+.hi-item { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 7px 10px; border-radius: 8px; border-left: 3px solid var(--border2); }
+.hi-critical { background: rgba(226, 28, 28, 0.08); border-left-color: var(--red); }
+.hi-notable { background: rgba(231, 165, 60, 0.10); border-left-color: var(--amber); }
+.hi-tier { flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 8px; border-radius: 20px; }
+.hi-tier-critical { color: #fff; background: var(--red-solid); }
+.hi-tier-notable { color: #3a2a05; background: var(--amber); }
+.hi-text { flex: 1; min-width: 0; }
+.hi-meta { flex: 0 0 auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.kw-hit { background: transparent; color: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+/* in-context accents inside the department detail */
+.dmr-list li.mk-critical { border-left: 3px solid var(--red); padding-left: 8px; }
+.dmr-list li.mk-notable { border-left: 3px solid var(--amber); padding-left: 8px; }
+
 /* performance matrix */
 .matrix-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .matrix-scroll { overflow-x: auto; }
