@@ -29,6 +29,20 @@ export async function loadMaintenanceActivities(reportId) {
   return data || []
 }
 
+// Activities across several reports (for the "Overall" cumulative scope). Carries
+// report_id so the caller can attribute each activity to its DMR.
+export async function loadMaintenanceActivitiesForReports(reportIds) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!reportIds || !reportIds.length) return []
+  const { data, error } = await supabase
+    .from('maintenance_activities')
+    .select('id, report_id, department, chief_in_charge, activity_text, activity_kind, status, created_at')
+    .in('report_id', reportIds)
+    .order('created_at', { ascending: true })
+  if (error) throw new Error(error.message)
+  return data || []
+}
+
 // Admin: correct a last-day activity's classification.
 export async function updateActivityStatus(id, status) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')

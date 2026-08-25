@@ -1302,6 +1302,75 @@ body {
 .rollup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .embedded-assets .wrap { padding: 0; max-width: none; }
 
+/* ---- Maintenance dashboard (redesigned tab) ---- */
+.maint-toolbar { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; }
+.maint-pick { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.maint-pick select { font-size: 13px; text-transform: none; letter-spacing: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border2); background: var(--panel); color: var(--text); min-width: 190px; }
+.maint-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.maint-header h2 { margin: 0 0 6px; }
+.maint-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.maint-date { font-size: 12px; color: var(--muted); }
+
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
+.kpi { border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; background: var(--panel); border-left-width: 4px; }
+.kpi-num { font-size: 30px; font-weight: 800; line-height: 1; font-family: 'JetBrains Mono', monospace; }
+.kpi-label { font-size: 12px; color: var(--muted); margin-top: 8px; font-weight: 600; }
+.kpi-critical { border-left-color: var(--red); background: rgba(226,28,28,0.07); }
+.kpi-critical .kpi-num { color: var(--red-solid); }
+.kpi-clear { border-left-color: var(--green); background: rgba(31,181,94,0.07); }
+.kpi-clear .kpi-num { color: var(--green); }
+.kpi-completed { border-left-color: var(--green); } .kpi-completed .kpi-num { color: var(--green); }
+.kpi-pending { border-left-color: var(--amber); } .kpi-pending .kpi-num { color: var(--amber); }
+.kpi-routine { border-left-color: var(--border2); } .kpi-routine .kpi-num { color: var(--muted); }
+
+.maint-body { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: start; }
+.maint-subnav { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 12px; }
+.maint-subnav button { text-align: left; font-size: 13px; padding: 9px 12px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.maint-subnav button:hover { background: var(--hover); color: var(--text); }
+.maint-subnav button.on { background: var(--panel); border-color: var(--border2); color: var(--green); font-weight: 600; }
+.sn-ico { font-size: 14px; }
+
+.dept-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.dept-grid-1 { display: grid; grid-template-columns: 1fr; gap: 14px; max-width: 640px; }
+.maint-deptcard .dept-ico { margin-right: 7px; }
+.maint-deptcard .dmr-list li { justify-content: flex-start; gap: 8px; align-items: flex-start; }
+.dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; display: inline-block; }
+.dot-done { background: var(--green); } .dot-pending { background: var(--amber); } .dot-routine { background: var(--dim); }
+
+.dept-banner { border-radius: 8px; padding: 8px 10px; margin: 4px 0 10px; font-size: 12.5px; }
+.dept-banner ul { margin: 4px 0 0; padding-left: 18px; }
+.dept-banner li { margin: 2px 0; }
+.dept-banner .db-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 8px; border-radius: 20px; }
+.dept-banner.crit { background: rgba(226,28,28,0.08); border: 1px solid rgba(226,28,28,0.28); }
+.dept-banner.crit .db-tag { background: var(--red-solid); color: #fff; }
+.dept-banner.notable { background: rgba(231,165,60,0.10); border: 1px solid rgba(231,165,60,0.30); }
+.dept-banner.notable .db-tag { background: var(--amber); color: #3a2a05; }
+.maint-mini-kpis { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); margin-top: 8px; }
+
+/* KPI scope toggle + clickable KPIs + inline expand */
+.kpi-scopebar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.scope-toggle { display: inline-flex; border: 1px solid var(--border2); border-radius: 8px; overflow: hidden; }
+.scope-toggle button { font-size: 12px; padding: 6px 13px; border: none; background: var(--panel); color: var(--muted); cursor: pointer; }
+.scope-toggle button.on { background: var(--green); color: #fff; font-weight: 600; }
+.scope-note { font-size: 12px; color: var(--dim); }
+.kpi.clickable { cursor: pointer; width: 100%; text-align: left; font: inherit; }
+.kpi.clickable:hover { border-color: var(--border2); }
+.kpi.open { outline: 2px solid var(--green); outline-offset: -1px; }
+.kpi-planned { border-left-color: var(--green); } .kpi-planned .kpi-num { color: var(--text); }
+.kpi-hint { font-size: 10px; color: var(--dim); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+.kpi-sub { font-size: 10.5px; color: var(--amber); margin-top: 2px; }
+.kpi-expand { margin-bottom: 16px; }
+.kpi-expand .expand-dept .dept-sub { margin-top: 0; }
+.kpi-expand .dmr-list li { justify-content: flex-start; gap: 8px; align-items: flex-start; }
+.it-date { margin-left: auto; font-size: 11px; color: var(--dim); font-family: 'JetBrains Mono', monospace; flex: 0 0 auto; }
+
+@media (max-width: 900px) {
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .maint-body { grid-template-columns: 1fr; }
+  .maint-subnav { flex-direction: row; flex-wrap: wrap; position: static; }
+  .dept-grid-2 { grid-template-columns: 1fr; }
+}
+
 /* DMR key highlights (two-tier) */
 .highlights-box { margin-top: 16px; border: 1px solid var(--border2); border-radius: 12px; padding: 14px 16px; background: var(--card); }
 .hi-head { font-weight: 700; font-size: 14px; margin-bottom: 10px; }

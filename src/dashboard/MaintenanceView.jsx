@@ -1,243 +1,357 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
-import { useAuth } from '../auth/AuthProvider'
 import { loadRigsForPicker } from './settings'
-import {
-  loadMaintenanceReports, uploadMaintenanceReport, deleteMaintenanceReport, loadMaintenanceRollup,
-} from './maintenance'
-import { prettyDate, todayISO } from './format'
+import { loadMaintenanceReports, loadMaintenanceActivitiesForReports } from './maintenance'
+import { matchKeywords } from './maintenanceKeywords'
+import { prettyDate } from './format'
 import { LoadError } from './LoadState'
-import MaintenanceReportDetail from './MaintenanceReportDetail'
-import AssetsView from './AssetsView'
 
-function statusClass(s) {
-  if (s === 'extracted') return 's-approved'
-  if (s === 'failed') return 's-rejected'
-  return 's-pending'
+// Department names vary in CASE across rigs — match case-insensitively, display original.
+const DEPT_ORDER = ['barge', 'electrical', 'mechanical', 'hse']
+const DEPT_ICON = { barge: '⚓', electrical: '⚡', mechanical: '⚙️', hse: '🦺', other: '🛠️' }
+const lc = (d) => String(d || '').toLowerCase().trim()
+const deptIcon = (d) => DEPT_ICON[lc(d)] || DEPT_ICON.other
+const statusDot = (s) => (s === 'completed' ? 'dot-done' : s === 'pending' ? 'dot-pending' : 'dot-routine')
+
+function orderDepts(names) {
+  const head = DEPT_ORDER.map((o) => names.find((p) => lc(p) === o)).filter(Boolean)
+  const extra = names.filter((p) => !DEPT_ORDER.includes(lc(p))).sort()
+  return [...head, ...extra]
 }
-function monthStartISO() {
-  const t = todayISO() // yyyy-mm-dd
-  return `${t.slice(0, 7)}-01`
+// Group a flat activity list by department, canonical order.
+function groupByDept(list) {
+  const g = new Map()
+  for (const a of list) {
+    const k = a.department || 'other'
+    if (!g.has(k)) g.set(k, { department: k, chief: a.chief_in_charge, last: [], planned: [], critical: [], notable: [] })
+    const grp = g.get(k)
+    if (!grp.chief && a.chief_in_charge) grp.chief = a.chief_in_charge
+    if (a.activity_kind === 'planned') grp.planned.push(a); else grp.last.push(a)
+    if (a.tier === 'critical') grp.critical.push(a)
+    else if (a.tier === 'notable') grp.notable.push(a)
+  }
+  return orderDepts([...g.keys()]).map((d) => g.get(d))
 }
+
+const KPI_DEFS = [
+  { key: 'planned', label: 'Planned', cls: 'kpi-planned' },
+  { key: 'completed', label: 'Completed', cls: 'kpi-completed' },
+  { key: 'pending', label: 'Pending', cls: 'kpi-pending' },
+  { key: 'routine', label: 'Routine', cls: 'kpi-routine' },
+]
+// Which activities belong to a KPI bucket.
+const inBucket = (a, key) => (key === 'planned' ? a.activity_kind === 'planned' : a.activity_kind !== 'planned' && a.status === key)
 
 export default function MaintenanceView() {
-  const { user, isAdmin } = useAuth()
   const [rigs, setRigs] = useState([])
-  const [reports, setReports] = useState(null)
-  const [rollup, setRollup] = useState(null)
+  const [reports, setReports] = useState([])
+  const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
-  // upload form
-  const [rigId, setRigId] = useState('')
-  const [reportDate, setReportDate] = useState(todayISO())
-  const [file, setFile] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState(null)
-  const fileRef = useRef(null)
+  const [rigId, setRigId] = useState(null)
+  const [reportId, setReportId] = useState(null)
+  const [inner, setInner] = useState('overview') // 'overview' | <dept> | 'analytics'
+  const [scope, setScope] = useState('this')     // 'this' | 'overall'
+  const [openKpi, setOpenKpi] = useState(null)    // null | 'planned' | 'completed' | 'pending' | 'routine'
 
-  const [selectedId, setSelectedId] = useState(null)
-  const [busyId, setBusyId] = useState(null)
-  const [showAssets, setShowAssets] = useState(false)
+  const [acts, setActs] = useState(null)          // activities for reports up to & incl. selected
+  const [actErr, setActErr] = useState(null)
 
   const load = useCallback(() => {
-    setErr(null)
-    Promise.all([loadRigsForPicker(), loadMaintenanceReports(), loadMaintenanceRollup(monthStartISO(), todayISO())])
-      .then(([r, reps, roll]) => { setRigs(r); setReports(reps); setRollup(roll) })
+    setLoading(true); setErr(null)
+    Promise.all([loadRigsForPicker(), loadMaintenanceReports()])
+      .then(([r, reps]) => { setRigs(r); setReports(reps) })
       .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false))
   }, [])
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [load, reloadKey])
 
-  const selected = reports?.find((r) => r.id === selectedId) || null
+  const reportsByRig = useMemo(() => {
+    const m = new Map()
+    for (const r of reports) { if (!m.has(r.rig_id)) m.set(r.rig_id, []); m.get(r.rig_id).push(r) }
+    for (const list of m.values()) list.sort((a, b) => String(b.report_date || '').localeCompare(String(a.report_date || '')))
+    return m
+  }, [reports])
 
-  async function onUpload(e) {
-    e.preventDefault()
-    setMsg(null)
-    if (!file) { setMsg({ type: 'err', text: 'Choose a .docx DMR file.' }); return }
-    if (!rigId) { setMsg({ type: 'err', text: 'Pick a rig.' }); return }
-    setBusy(true)
-    try {
-      await uploadMaintenanceReport({ rigId, reportDate, file, userId: user?.id })
-      setMsg({ type: 'ok', text: `Uploaded “${file.name}”.` })
-      setFile(null)
-      if (fileRef.current) fileRef.current.value = ''
-      load()
-    } catch (e2) {
-      setMsg({ type: 'err', text: e2.message })
-    } finally {
-      setBusy(false)
-    }
-  }
+  useEffect(() => {
+    if (rigId || !rigs.length) return
+    const withData = rigs.find((r) => (reportsByRig.get(r.id) || []).length > 0)
+    setRigId((withData || rigs[0]).id)
+  }, [rigs, reportsByRig, rigId])
 
-  async function onDelete(rep) {
-    const label = `${rep.rig_name || 'report'} · ${rep.report_date || ''}`
-    if (!window.confirm(`Delete DMR “${label}” and its stored file? This cannot be undone.`)) return
-    setBusyId(rep.id)
-    setErr(null)
-    try {
-      await deleteMaintenanceReport(rep.id, rep.source_file_path)
-      if (selectedId === rep.id) setSelectedId(null)
-      load()
-    } catch (e) {
-      setErr(e.message)
-    } finally {
-      setBusyId(null)
-    }
-  }
+  const rigReports = rigId ? (reportsByRig.get(rigId) || []) : []
+  const selectedReport = useMemo(() => {
+    if (!rigReports.length) return null
+    return rigReports.find((r) => r.id === reportId) || rigReports[0]
+  }, [rigReports, reportId])
 
-  if (!isSupabaseConfigured) {
-    return (
-      <div className="wrap">
-        <div className="state err">
-          Supabase is not configured. Fill VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in
-          .env.local and restart the dev server.
-        </div>
-      </div>
-    )
-  }
+  // reports up to & including the selected date (for Overall)
+  const reportsUpTo = useMemo(() => {
+    if (!selectedReport) return []
+    return rigReports.filter((r) => String(r.report_date || '') <= String(selectedReport.report_date || ''))
+  }, [rigReports, selectedReport])
+  const dateById = useMemo(() => new Map(rigReports.map((r) => [r.id, r.report_date])), [rigReports])
 
-  // Detail view
-  if (selected) {
-    return (
-      <div className="wrap">
-        <MaintenanceReportDetail
-          report={selected}
-          isAdmin={isAdmin}
-          onBack={() => setSelectedId(null)}
-          onDelete={() => onDelete(selected)}
-          onDeleting={busyId === selected.id}
-        />
-      </div>
-    )
-  }
+  // load activities for all reports up to selected (covers both scopes)
+  useEffect(() => {
+    setActs(null); setActErr(null)
+    if (!reportsUpTo.length) return
+    let cancelled = false
+    loadMaintenanceActivitiesForReports(reportsUpTo.map((r) => r.id))
+      .then((a) => { if (!cancelled) setActs(a) })
+      .catch((e) => { if (!cancelled) setActErr(e.message) })
+    return () => { cancelled = true }
+  }, [reportsUpTo])
+
+  const allActs = useMemo(() => (acts || []).map((a) => ({ ...a, ...matchKeywords(a.activity_text) })), [acts])
+  const thisActs = useMemo(() => (selectedReport ? allActs.filter((a) => a.report_id === selectedReport.id) : []), [allActs, selectedReport])
+  const scopeActs = scope === 'this' ? thisActs : allActs
+
+  const byDeptThis = useMemo(() => groupByDept(thisActs), [thisActs])
+  const counts = useMemo(() => ({
+    planned: scopeActs.filter((a) => inBucket(a, 'planned')).length,
+    completed: scopeActs.filter((a) => inBucket(a, 'completed')).length,
+    pending: scopeActs.filter((a) => inBucket(a, 'pending')).length,
+    routine: scopeActs.filter((a) => inBucket(a, 'routine')).length,
+  }), [scopeActs])
+
+  const rigName = rigs.find((r) => r.id === rigId)?.name || '—'
+
+  if (!isSupabaseConfigured) return <div className="wrap"><div className="state err">Supabase is not configured. Fill VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in .env.local and restart.</div></div>
+  if (loading) return <div className="wrap"><div className="state">Loading maintenance…</div></div>
+  if (err) return <div className="wrap"><LoadError message={err} onRetry={() => setReloadKey((k) => k + 1)} /></div>
+
+  const thisExtracted = selectedReport && (selectedReport.extraction_status === 'extracted' || selectedReport.extraction_status === 'needs_review')
+
+  // expandable KPI list (respects scope), grouped by dept
+  const expandItems = openKpi ? scopeActs.filter((a) => inBucket(a, openKpi)) : []
+  const expandByDept = openKpi ? groupByDept(expandItems) : []
 
   return (
-    <div className="wrap">
-      <div className="sec-h">
-        <h2>Maintenance — Daily Maintenance Reports</h2>
-        <span className="hint">Department-wise activities from uploaded DMRs</span>
-      </div>
-
-      {err && <LoadError message={err} onRetry={load} />}
-
-      {/* Upload (admin) */}
-      <div className="panel accent" style={{ '--k': 'var(--amber)' }}>
-        <h3>Upload DMR</h3>
-        <div className="psub">Upload a rig’s Daily Maintenance Report (.docx) · stored, then extracted by the DMR extractor</div>
-        {!isAdmin ? (
-          <div className="setting-note">Uploading DMRs is admin-only. You can view the reports below.</div>
-        ) : (
-          <form className="wellplan-form" onSubmit={onUpload}>
-            <div className="wp-fields">
-              <label className="wp-field">
-                <span>Rig</span>
-                <select value={rigId} onChange={(e) => setRigId(e.target.value)}>
-                  <option value="">— select rig —</option>
-                  {rigs.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
-              </label>
-              <label className="wp-field">
-                <span>Report date</span>
-                <input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} />
-              </label>
-              <label className="wp-field">
-                <span>DMR file (.docx)</span>
-                <input ref={fileRef} type="file" accept=".docx" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-              </label>
-            </div>
-            <div className="wp-actions">
-              <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Uploading…' : 'Upload DMR'}</button>
-              {msg && <span className={`wp-msg ${msg.type}`}>{msg.text}</span>}
-            </div>
-          </form>
+    <div className="wrap maint-dash">
+      {/* Toolbar: rig + report-date */}
+      <div className="maint-toolbar">
+        <label className="maint-pick">
+          <span>Rig</span>
+          <select value={rigId || ''} onChange={(e) => { setRigId(e.target.value); setReportId(null); setInner('overview'); setOpenKpi(null) }}>
+            {rigs.map((r) => {
+              const has = (reportsByRig.get(r.id) || []).length
+              return <option key={r.id} value={r.id}>{r.name}{has ? '' : ' — no DMR'}</option>
+            })}
+          </select>
+        </label>
+        {rigReports.length > 0 && (
+          <label className="maint-pick">
+            <span>Report date</span>
+            <select value={selectedReport?.id || ''} onChange={(e) => { setReportId(e.target.value); setOpenKpi(null) }}>
+              {rigReports.map((r) => <option key={r.id} value={r.id}>{prettyDate(r.report_date)}</option>)}
+            </select>
+          </label>
         )}
       </div>
 
-      {/* Monthly rollup */}
-      <div className="panel">
-        <h3>This month — activity rollup</h3>
-        <div className="psub">Last-day activities since {prettyDate(monthStartISO())} · completed vs pending vs routine</div>
-        {!rollup ? (
-          <div className="state">Loading…</div>
-        ) : rollup.reportCount === 0 ? (
-          <div className="npt-empty">No DMRs recorded this month yet.</div>
-        ) : (
-          <div className="rollup-grid">
-            <RollupTable title="By rig" rows={rollup.byRig} />
-            <RollupTable title="By department" rows={rollup.byDept} />
+      {/* Header */}
+      <div className="maint-header">
+        <div>
+          <h2>{rigName}</h2>
+          <div className="maint-sub">
+            <span className="spill s-approved">Active Operations</span>
+            {selectedReport ? <span className="maint-date">Latest DMR · {prettyDate(selectedReport.report_date)}</span> : <span className="maint-date">No DMR on record</span>}
           </div>
-        )}
-      </div>
-
-      {/* Reports list */}
-      <div className="panel">
-        <h3>Maintenance reports</h3>
-        {!reports ? (
-          <div className="state">Loading…</div>
-        ) : reports.length === 0 ? (
-          <div className="npt-empty">No DMRs uploaded yet.</div>
-        ) : (
-          <div className="matrix-scroll">
-            <table className="matrix">
-              <thead>
-                <tr><th>Rig</th><th>Date</th><th>File</th><th>Status</th><th>Uploaded</th><th className="ta-r">Actions</th></tr>
-              </thead>
-              <tbody>
-                {reports.map((r) => (
-                  <tr key={r.id} className="clickable" onClick={() => setSelectedId(r.id)}>
-                    <td>{r.rig_name || '—'}</td>
-                    <td>{r.report_date ? prettyDate(r.report_date) : '—'}</td>
-                    <td className="mono wp-file" title={r.source_file_name || ''}>{r.source_file_name || '—'}</td>
-                    <td><span className={`spill ${statusClass(r.extraction_status)}`}>{r.extraction_status}</span></td>
-                    <td>{r.created_at ? prettyDate(String(r.created_at).slice(0, 10)) : '—'}</td>
-                    <td className="ta-r" onClick={(e) => e.stopPropagation()}>
-                      <button type="button" className="mini-btn" onClick={() => setSelectedId(r.id)}>View</button>
-                      {isAdmin && <button type="button" className="mini-btn reject" disabled={busyId === r.id} onClick={() => onDelete(r)}>Delete</button>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <div className="setting-note">
-          Stage 1: DMRs are stored in the <code>maintenance-reports</code> bucket and extracted
-          department-wise via <code>scripts/extract-dmr.js</code> (manual for now).
         </div>
       </div>
 
-      {/* Secondary: existing assets/equipment content */}
-      <div className="panel">
-        <div className="sec-h" style={{ margin: 0 }}>
-          <h3>Assets &amp; inventory <span className="hint">(reference)</span></h3>
-          <button type="button" className="btn" onClick={() => setShowAssets((v) => !v)}>
-            {showAssets ? 'Hide' : 'Show'}
-          </button>
-        </div>
-        {showAssets && <div className="embedded-assets" style={{ marginTop: 12 }}><AssetsView /></div>}
-      </div>
+      {!selectedReport ? (
+        <div className="panel"><div className="npt-empty">No maintenance report yet for <b>{rigName}</b>. DMRs appear here once the rig sends one and the pipeline ingests it.</div></div>
+      ) : (
+        <>
+          {/* KPI scope toggle */}
+          <div className="kpi-scopebar">
+            <div className="scope-toggle">
+              <button type="button" className={scope === 'this' ? 'on' : ''} onClick={() => { setScope('this'); setOpenKpi(null) }}>This report</button>
+              <button type="button" className={scope === 'overall' ? 'on' : ''} onClick={() => { setScope('overall'); setOpenKpi(null) }}>Overall</button>
+            </div>
+            <span className="scope-note">
+              {scope === 'this'
+                ? `${prettyDate(selectedReport.report_date)} DMR`
+                : `cumulative across ${reportsUpTo.length} report${reportsUpTo.length === 1 ? '' : 's'} up to ${prettyDate(selectedReport.report_date)}`}
+            </span>
+          </div>
+
+          {/* KPI cards (clickable) */}
+          {!acts ? (
+            <div className="state">Loading activities…</div>
+          ) : actErr ? (
+            <LoadError message={actErr} onRetry={() => setReloadKey((k) => k + 1)} />
+          ) : (
+            <>
+              <div className="kpi-row">
+                {KPI_DEFS.map((k) => {
+                  const overallPending = scope === 'overall' && k.key === 'pending'
+                  return (
+                    <button
+                      type="button"
+                      key={k.key}
+                      className={`kpi ${k.cls} clickable ${openKpi === k.key ? 'open' : ''}`}
+                      aria-expanded={openKpi === k.key}
+                      onClick={() => setOpenKpi((cur) => (cur === k.key ? null : k.key))}
+                      title={overallPending ? 'Count of activities ever marked pending across reports — not a live backlog (DMRs do not link a pending item to its later completion).' : undefined}
+                    >
+                      <div className="kpi-num">{counts[k.key]}</div>
+                      <div className="kpi-label">{k.label}{overallPending ? ' *' : ''}</div>
+                      {overallPending && <div className="kpi-sub">mentions across reports</div>}
+                      <div className="kpi-hint">{openKpi === k.key ? 'Hide ▲' : 'View ▼'}</div>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Expandable list for the open KPI */}
+              {openKpi && (
+                <div className="kpi-expand panel">
+                  <div className="sec-h" style={{ margin: '0 0 8px' }}>
+                    <h3 style={{ textTransform: 'capitalize' }}>{openKpi} activities <span className="hint">· {scope === 'this' ? 'this report' : `overall (${reportsUpTo.length} report${reportsUpTo.length === 1 ? '' : 's'})`}</span></h3>
+                    <button type="button" className="btn" onClick={() => setOpenKpi(null)}>Close</button>
+                  </div>
+                  {expandItems.length === 0 ? (
+                    <div className="npt-empty">No {openKpi} activities in this scope.</div>
+                  ) : (
+                    <div className="dept-grid-2">
+                      {expandByDept.map((g) => {
+                        const items = g[openKpi === 'planned' ? 'planned' : 'last'].filter((a) => inBucket(a, openKpi))
+                        if (!items.length) return null
+                        return (
+                          <div key={g.department} className="expand-dept">
+                            <div className="dept-sub"><span className="dept-ico">{deptIcon(g.department)}</span>{g.department}</div>
+                            <ul className="dmr-list">
+                              {items.map((a) => (
+                                <li key={a.id}>
+                                  {openKpi !== 'planned' && <span className={`dot ${statusDot(a.status)}`} />}
+                                  <span className="dmr-text">{a.activity_text}</span>
+                                  {scope === 'overall' && <span className="it-date">{prettyDate(dateById.get(a.report_id))}</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Sub-nav + content */}
+              <div className="maint-body">
+                <nav className="maint-subnav">
+                  <button type="button" className={inner === 'overview' ? 'on' : ''} onClick={() => setInner('overview')}>Rig Overview</button>
+                  {byDeptThis.map((g) => (
+                    <button key={g.department} type="button" className={inner === g.department ? 'on' : ''} onClick={() => setInner(g.department)}>
+                      <span className="sn-ico">{deptIcon(g.department)}</span>{g.department}
+                    </button>
+                  ))}
+                  <button type="button" className={inner === 'analytics' ? 'on' : ''} onClick={() => setInner('analytics')}>Analytics</button>
+                </nav>
+
+                <div className="maint-content">
+                  {!thisExtracted ? (
+                    <div className="pending-gto">This DMR ({prettyDate(selectedReport.report_date)}) is <b>{selectedReport.extraction_status}</b> — department detail appears once it's extracted. (KPIs above can still total older reports via “Overall”.)</div>
+                  ) : inner === 'analytics' ? (
+                    <AnalyticsPanel rigName={rigName} byDept={byDeptThis} />
+                  ) : byDeptThis.length === 0 ? (
+                    <div className="npt-empty">No department activities in this DMR.</div>
+                  ) : inner === 'overview' ? (
+                    // CHANGE 1: Rig Overview = highlights only
+                    <div className="dept-grid-2">
+                      {byDeptThis.map((g) => <OverviewCard key={g.department} g={g} />)}
+                    </div>
+                  ) : (
+                    // Department tab = full detail for that one department
+                    <div className="dept-grid-1">
+                      {byDeptThis.filter((g) => g.department === inner).map((g) => <DeptDetailCard key={g.department} g={g} />)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
     </div>
   )
 }
 
-function RollupTable({ title, rows }) {
+// Rig Overview card — highlights ONLY (no lists).
+function OverviewCard({ g }) {
+  const hasHi = g.critical.length > 0 || g.notable.length > 0
   return (
-    <div className="rollup-col">
-      <div className="eyebrow" style={{ margin: '0 0 6px' }}>{title}</div>
+    <div className="dept-card maint-deptcard">
+      <div className="dept-head">
+        <span className="dept-name"><span className="dept-ico">{deptIcon(g.department)}</span>{g.department}</span>
+        <span className="dept-chief">Chief: <b>{g.chief || '—'}</b></span>
+      </div>
+      {g.critical.length > 0 && (
+        <div className="dept-banner crit"><span className="db-tag">⚠ Critical</span><ul>{g.critical.map((a) => <li key={a.id}>{a.activity_text}</li>)}</ul></div>
+      )}
+      {g.notable.length > 0 && (
+        <div className="dept-banner notable"><span className="db-tag">Notable</span><ul>{g.notable.map((a) => <li key={a.id}>{a.activity_text}</li>)}</ul></div>
+      )}
+      {!hasHi && <div className="npt-empty sm">No flagged items — nothing critical or notable.</div>}
+    </div>
+  )
+}
+
+// Department tab — FULL detail (last day with dots + today's plan).
+function DeptDetailCard({ g }) {
+  return (
+    <div className="dept-card maint-deptcard">
+      <div className="dept-head">
+        <span className="dept-name"><span className="dept-ico">{deptIcon(g.department)}</span>{g.department}</span>
+        <span className="dept-chief">Chief: <b>{g.chief || '—'}</b></span>
+      </div>
+      {g.critical.length > 0 && (
+        <div className="dept-banner crit"><span className="db-tag">⚠ Critical</span><ul>{g.critical.map((a) => <li key={a.id}>{a.activity_text}</li>)}</ul></div>
+      )}
+      {g.notable.length > 0 && (
+        <div className="dept-banner notable"><span className="db-tag">Notable</span><ul>{g.notable.map((a) => <li key={a.id}>{a.activity_text}</li>)}</ul></div>
+      )}
+      <div className="dept-sub">Last day</div>
+      {g.last.length === 0 ? <div className="npt-empty sm">No last-day activities.</div> : (
+        <ul className="dmr-list">
+          {g.last.map((a) => (
+            <li key={a.id}><span className={`dot ${statusDot(a.status)}`} /><span className="dmr-text">{a.activity_text}</span></li>
+          ))}
+        </ul>
+      )}
+      <div className="dept-sub">Today’s plan</div>
+      {g.planned.length === 0 ? <div className="npt-empty sm">No planned activities.</div> : (
+        <ul className="dmr-list planned">{g.planned.map((a) => <li key={a.id}><span className="dmr-text">{a.activity_text}</span></li>)}</ul>
+      )}
+    </div>
+  )
+}
+
+function AnalyticsPanel({ rigName, byDept }) {
+  return (
+    <div className="panel">
+      <h3>{rigName} — maintenance summary (latest DMR)</h3>
+      <div className="psub">From this report’s real activities · no fabricated metrics</div>
       <div className="matrix-scroll">
         <table className="matrix">
-          <thead>
-            <tr><th>{title.replace('By ', '')}</th><th className="num">✓ Done</th><th className="num">⏳ Pending</th><th className="num">↻ Routine</th><th className="num">Total</th></tr>
-          </thead>
+          <thead><tr><th>Department</th><th className="num">✓ Done</th><th className="num">⏳ Pending</th><th className="num">↻ Routine</th><th className="num">Planned</th><th className="num">Critical</th><th className="num">Notable</th></tr></thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.label}>
-                <td>{r.label}</td>
-                <td className="num mono">{r.completed}</td>
-                <td className="num mono">{r.pending}</td>
-                <td className="num mono">{r.routine}</td>
-                <td className="num mono">{r.total}</td>
-              </tr>
-            ))}
+            {byDept.map((g) => {
+              const done = g.last.filter((a) => a.status === 'completed').length
+              const pend = g.last.filter((a) => a.status === 'pending').length
+              const rout = g.last.filter((a) => a.status === 'routine').length
+              return (
+                <tr key={g.department}>
+                  <td>{deptIcon(g.department)} {g.department}</td>
+                  <td className="num mono">{done}</td><td className="num mono">{pend}</td><td className="num mono">{rout}</td>
+                  <td className="num mono">{g.planned.length}</td><td className="num mono">{g.critical.length}</td><td className="num mono">{g.notable.length}</td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
