@@ -48,7 +48,7 @@ export default function AccessStatusScreen({ variant = 'pending', theme = 'dark'
         <div className="logo-plate login-logo">
           <img className="logo-img" src="/Jindal%20Logo.jpg" alt="Jindal Drilling &amp; Industries Ltd." />
         </div>
-        <div className="login-title">DDR Tracker</div>
+        <div className="login-wordmark">JDIL ORBIT</div>
 
         {rejected ? (
           <>
