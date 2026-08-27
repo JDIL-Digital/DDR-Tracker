@@ -10,6 +10,10 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient'
 
 const ALLOWED_DOMAIN = 'jindalmumbai.com'
+// Explicit per-email allow-list for approved exceptions OUTSIDE the company
+// domain. Minimal by design — individual addresses only, never a whole external
+// domain. Keep in sync with migration 0017's handle_new_user() allow check.
+const ALLOWED_EMAILS = ['advisor@jindaldrilling.in']
 
 const AuthContext = createContext(null)
 
@@ -20,7 +24,9 @@ export function useAuth() {
 }
 
 function emailAllowed(email) {
-  return typeof email === 'string' && email.toLowerCase().endsWith(`@${ALLOWED_DOMAIN}`)
+  if (typeof email !== 'string') return false
+  const e = email.toLowerCase()
+  return e.endsWith(`@${ALLOWED_DOMAIN}`) || ALLOWED_EMAILS.includes(e)
 }
 
 export function AuthProvider({ children }) {
