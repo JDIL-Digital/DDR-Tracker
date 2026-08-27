@@ -7,13 +7,14 @@ import FleetView from './FleetView'
 import AnalyticsView from './AnalyticsView'
 import ReportsView from './ReportsView'
 import MaintenanceView from './MaintenanceView'
+import OpexView from './OpexView'
 import SettingsView from './SettingsView'
 
 // App shell: owns which page is active. Theme is now owned by App (so the login
 // screen is themed too) and passed in; the sidebar switches pages while TopBar
 // and the theme are shared across pages.
 export default function Dashboard({ theme, onSetTheme, onToggleTheme }) {
-  const [activeView, setActiveView] = useState('fleet') // 'fleet' | 'analytics' | 'reports' | 'maintenance' | 'settings'
+  const [activeView, setActiveView] = useState('fleet') // 'fleet' | 'analytics' | 'reports' | 'maintenance' | 'opex' | 'settings'
   const [highlightRig, setHighlightRig] = useState(null) // rig to highlight on Fleet (from search)
   const [codeFilter, setCodeFilter] = useState(null)     // activity code to filter in Settings (from search)
 
@@ -45,6 +46,8 @@ export default function Dashboard({ theme, onSetTheme, onToggleTheme }) {
             <ReportsView />
           ) : activeView === 'maintenance' ? (
             <MaintenanceView />
+          ) : activeView === 'opex' ? (
+            <OpexView />
           ) : activeView === 'settings' ? (
             <SettingsView theme={theme} onSetTheme={onSetTheme} codeFilter={codeFilter} onClearCodeFilter={() => setCodeFilter(null)} />
           ) : (

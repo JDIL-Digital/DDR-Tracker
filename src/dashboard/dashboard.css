@@ -1302,6 +1302,11 @@ body {
 .rollup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .embedded-assets .wrap { padding: 0; max-width: none; }
 
+/* OPEX embedded dashboard — iframe treated as a black box. Fills the area under
+   the sticky topbar; the iframe scrolls its own content. -40px cancels .main's
+   bottom padding so there's no gap / page scroll. */
+.opex-frame { display: block; width: 100%; height: calc(100vh - 60px); border: 0; margin-bottom: -40px; background: var(--bg); }
+
 /* ---- Maintenance dashboard (redesigned tab) ---- */
 .maint-toolbar { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; }
 .maint-pick { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
