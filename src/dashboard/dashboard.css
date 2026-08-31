@@ -1302,10 +1302,17 @@ body {
 .rollup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .embedded-assets .wrap { padding: 0; max-width: none; }
 
-/* OPEX embedded dashboard — iframe treated as a black box. Fills the area under
-   the sticky topbar; the iframe scrolls its own content. -40px cancels .main's
-   bottom padding so there's no gap / page scroll. */
-.opex-frame { display: block; width: 100%; height: calc(100vh - 60px); border: 0; margin-bottom: -40px; background: var(--bg); }
+/* OPEX embedded dashboard — iframe treated as a black box. The wrap fills the
+   area under the sticky topbar (−40px cancels .main's bottom padding); an
+   optional save-status bar sits above the iframe, which flex-fills the rest. */
+.opex-wrap { height: calc(100vh - 60px); margin-bottom: -40px; display: flex; flex-direction: column; }
+.opex-frame { flex: 1 1 auto; width: 100%; border: 0; background: var(--bg); }
+.opex-savebar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; font-size: 13px; border-bottom: 1px solid var(--border); }
+.opex-savebar.saving  { background: rgba(62,143,224,0.12); color: var(--blue); }
+.opex-savebar.success { background: rgba(31,181,94,0.12); color: var(--green); }
+.opex-savebar.error   { background: rgba(226,28,28,0.10); color: var(--red); }
+.opex-savebar .btn { flex: 0 0 auto; }
 
 /* ---- Maintenance dashboard (redesigned tab) ---- */
 .maint-toolbar { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; }

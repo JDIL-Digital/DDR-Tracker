@@ -17,7 +17,7 @@
 
 <style>
   :root {
-    --bg: #f5f4ee;
+    --bg: #f4f6f8;
     --bg-grain: #f1efe8;
     --surface: #ffffff;
     --surface-alt: #faf9f4;
@@ -715,6 +715,7 @@
 
   <button class="ghost" id="printVendor">Print</button>
   <button class="ghost" id="resetAll">Reset all</button>
+  <button class="ghost" id="saveOrbitBtn">Save to ORBIT</button>
 </header>
 
 <main>
@@ -3074,7 +3075,38 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('printVendor').onclick = printVendorReport;
   const advPrint = document.getElementById('advPrintBtn');
   if (advPrint) advPrint.onclick = printSearchList;
+  const saveOrbit = document.getElementById('saveOrbitBtn');
+  if (saveOrbit) saveOrbit.onclick = emitSaveToOrbit;
 });
+
+/* ===== ORBIT integration (ADDED) =========================================
+   Emits the already-parsed rows to the parent ORBIT app for persistence.
+   Reads state.localData / state.importData ONLY — does not touch any
+   parsing, currency math, KPI, chart, or search logic. The parent (OpexView)
+   verifies event.origin + source and does the Supabase insert. ===== */
+function emitSaveToOrbit() {
+  try {
+    if (window.parent === window) { alert('“Save to ORBIT” works when the dashboard is opened inside the ORBIT app.'); return; }
+    const localRows  = Array.isArray(state.localData)  ? state.localData  : [];
+    const importRows = Array.isArray(state.importData) ? state.importData : [];
+    if (!localRows.length && !importRows.length) { alert('No parsed rows to save — upload the Local and/or Import workbook first.'); return; }
+    const nameOf = (id) => { const el = document.getElementById(id); return el ? el.textContent.trim() : ''; };
+    window.parent.postMessage({
+      type: 'opex:save',
+      local: localRows,
+      import: importRows,
+      meta: {
+        localFilename: nameOf('localName'),
+        importFilename: nameOf('importName'),
+        localCount: localRows.length,
+        importCount: importRows.length,
+        totalCount: localRows.length + importRows.length
+      }
+    }, window.location.origin);
+  } catch (e) {
+    alert('Could not send data to ORBIT: ' + (e && e.message ? e.message : e));
+  }
+}
 </script>
 
 </body>
