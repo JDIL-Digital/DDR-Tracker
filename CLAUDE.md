@@ -1,7 +1,8 @@
 # DDR Tracker — Project State / Handoff
 
-_Handoff notes so a future Claude Code session can continue this project. Last updated: 2026-08-25
-(DMR auto-ingest pipeline fully deployed; depth-vs-days chart; OAuth secret rotation)._
+_Handoff notes so a future Claude Code session can continue this project. Last updated: 2026-09-01
+(OPEX feature stages 1/2a/2b-1; DMR cron reschedule + cost-verify; Maintenance dashboard redesign;
+JDIL ORBIT branding + favicon)._
 
 ## 1. What this project is
 **DDR Tracker** is an internal tool for **Jindal Drilling & Industries Ltd.** It standardizes
@@ -21,6 +22,62 @@ The **DMR (daily maintenance report) pipeline is now FULLY DEPLOYED and runs aut
 the next section. Still **manual** (local Node scripts): **DDR/drilling ingest** (not built yet),
 the **well-plan extractor**, and the **daily summary email**.
 
+## OPEX FEATURE (Purchase/Procurement dashboard) — Stages 1, 2a, 2b-1 DONE
+Goal: monitor spend, track vendors, catch overspend, report to management. Data = two Excel files
+(PO_List_Local.xlsx INR, PO_List_Import.xlsx USD), each with per-rig/per-location sheets.
+
+- Stage 1 (on main): OPEX tab in sidebar BELOW Maintenance (order: Fleet, Analytics, Reports,
+  Maintenance, OPEX, Settings). Embeds the existing self-contained HTML dashboard
+  (public/opex/index.html — plain HTML + Chart.js + SheetJS via CDN) UNCHANGED via an iframe in
+  src/dashboard/OpexView.jsx. Auth-gated in-app (approved users). CAVEAT: the raw file
+  /opex/index.html is publicly served (no data risk — dashboard ships empty, data only appears
+  after client-side upload); truly gating it is a Stage 2b-2 (native React) concern.
+- Dashboard logic is a BLACK BOX — do not change its calculations/KPIs/filters/search. Verified
+  real numbers: Total Spend ₹317 Cr, 6,046 POs (4,635 local + 1,411 import), 849 vendors.
+- Stage 2a (on main): "Save to ORBIT" persistence. Migration 0018 = opex_uploads + purchase_orders
+  tables, approved-user RLS (is_approved() for SELECT+INSERT, no browser UPDATE; matches 0015
+  pattern). Migration 0019 = owner-scoped DELETE on opex_uploads (uploaded_by = auth.uid()) for
+  failure-cleanup. Save path: iframe emits parsed rows via postMessage → parent OpexView.jsx does
+  the Supabase insert with the authenticated client (option c1 — Supabase creds/session never enter
+  the iframe). Mapping: department=null; local usd_equivalent=null (don't bake in live FX); local
+  amount=base/amount_to_vendor=incl-GST; import amount=AmountOriginal/usd_equivalent=AmountUSD.
+  Verified: saves exactly 6,046 rows matching the dashboard.
+- Stage 2b-1 (on main): UPSERT DEDUP. Migration 0020 = line_key (SHA-256 of
+  source|po_number|location|order_date|amount|description|occurrence_index) + occurrence_index +
+  unique index. Client upsert with {onConflict:'line_key', ignoreDuplicates:true} = insert-if-new /
+  skip-if-exists (ON CONFLICT DO NOTHING), provenance preserved (existing rows keep original
+  batch_id). occurrence_index = per-identity-tuple rank (stable under reordering) so legitimately-
+  identical lines aren't collapsed. KEY BUSINESS FACT: PO amounts are IMMUTABLE once released — so
+  amount is part of line identity; no update-in-place needed. Verified: save same file twice →
+  "0 new, 6046 skipped, stays 6046" (no double-count).
+
+## OPEX — STILL TO DO
+- Stage 2b-2 (NEXT, biggest piece): rebuild the dashboard as NATIVE REACT reading FROM Supabase
+  (purchase_orders) — so stored/historical data shows without re-uploading, fully ORBIT-styled,
+  and fixes the public-raw-file gap (removes the iframe). MUST be done incrementally with
+  number-verification at each step (KPIs first → verify vs current dashboard → charts → verify →
+  tables/search) to avoid logic drift. The current HTML dashboard is the reference for "correct
+  numbers."
+- Stage 3 (later): Google Sheets auto-sync (like the DMR pipeline).
+- Stage 4 (later): chatbot over purchase data (Anthropic API).
+- OPEN QUESTION for 2b-2: does PO status ever change in updated files, or is it fixed like amount?
+  (If it can change, add "update status on conflict"; if fixed, pure skip-if-exists is complete.)
+
+## OTHER THIS SESSION
+- DMR pipeline rescheduled to cron "30 7,8,9 * * *" (7:30/8:30/9:30 AM IST) — was 30 7,9,10.
+  Verified running: pulled all rigs' DMRs automatically. COST VERIFIED: already-processed reports
+  skip at line 107 BEFORE any Anthropic call (+ status='uploaded' gate) — no re-extraction / no
+  double-charging on the 3 daily runs.
+- Maintenance dashboard redesign (on main): rig picker, This report/Overall KPI toggle, clickable
+  KPI drill-down, highlights-only Overview + department full-detail. [note if admin upload/delete/
+  edit tools still need re-adding as a collapsed Manage section.]
+- Branding (on main): tab title "DDR Tracker"→"JDIL ORBIT", access screen rainbow wordmark, rainbow
+  globe favicon (public/favicon.svg).
+
+## STANDING TODO
+- Disable the old exposed OAuth secret (...l7Iw) in Google Cloud.
+- Maintenance admin tools (upload/delete/edit-status) as a collapsed admin section.
+
 ## DMR AUTO-INGEST PIPELINE — FULLY DEPLOYED & AUTOMATIC (done this session)
 The daily maintenance report (DMR) pipeline is LIVE and runs automatically. No manual step needed.
 
@@ -32,7 +89,8 @@ type per project):
 
 Scheduled deployment config (in the JDIL DMR Scheduler project):
 - Run command: node scripts/ingest-dmr.js --save --extract
-- Cron: 30 7,9,10 * * *  (runs 3x each morning: 7:30, 9:30, 10:30 AM), timezone IST (Asia/Kolkata)
+- Cron: 30 7,8,9 * * *  (runs 3x each morning: 7:30, 8:30, 9:30 AM), timezone IST (Asia/Kolkata)
+  [rescheduled this session from the earlier 30 7,9,10]
 - Node.js 22 REQUIRED (Node 20 fails — Supabase SDK needs native WebSocket / Node 22+). This was
   the blocking error; upgrading to Node 22 fixed it.
 - Six secrets must exist in THIS project's Secrets (separate from JDILORBIT's): GMAIL_CLIENT_ID,
