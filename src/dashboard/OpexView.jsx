@@ -1,25 +1,37 @@
-// OpexView — OPEX Stage 2a Step 2.
+// OpexView — OPEX Stage 2a/2b-1.
 //
 // Embeds the standalone OPEX dashboard (public/opex/index.html) via an iframe
-// (black box — parse/calc/KPI logic untouched) AND adds a save-through-parent
-// path: the iframe posts its already-parsed rows via postMessage; THIS parent
-// component maps them to the purchase_orders schema and inserts them with the
-// app's existing authenticated Supabase client (so RLS is_approved() gates it).
-// The iframe never touches Supabase, keys, or the session.
+// (black box — parse/calc/KPI untouched) AND adds a save-through-parent path:
+// the iframe posts its already-parsed rows via postMessage; this parent maps
+// them to the purchase_orders schema and UPSERTS them with the app's existing
+// authenticated Supabase client (RLS is_approved() gates it).
+//
+// Stage 2b-1: accumulate/merge model. Each row gets a stable line_key
+// (SHA-256 of source|po_number|location|order_date|amount|description|occurrence_index);
+// upsert with ignoreDuplicates (ON CONFLICT DO NOTHING) => insert-if-new /
+// skip-if-exists. Amounts are immutable (part of identity). occurrence_index is
+// a per-identity-tuple rank so legitimately-identical lines are preserved.
+// Existing rows keep their original upload_batch_id (provenance) because DO
+// NOTHING never touches them.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../auth/AuthProvider'
 
-const CHUNK = 500 // rows per insert call — keeps payload well under limits for 6k+ uploads
+const CHUNK = 500
+const SEP = '' // field delimiter that cannot occur in the data
 
-// FNV-1a 32-bit → 8-char hex. Stable row fingerprint for future dedup.
-function fnv1a(str) {
+// Legacy row_fingerprint (exact-dup signal, kept for continuity). The UNIQUE
+// upsert key is line_key (SHA-256) below.
+function fnv1a(s) {
   let h = 0x811c9dc5
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i)
-    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0
-  }
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0 }
   return ('00000000' + h.toString(16)).slice(-8)
+}
+
+// SHA-256 hex via Web Crypto (secure context: localhost + https both qualify).
+async function sha256hex(s) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 // Date (or null) -> 'YYYY-MM-DD' using local parts (no TZ shift).
@@ -32,10 +44,16 @@ function toISODate(d) {
 const num = (v) => (v === '' || v === null || v === undefined || isNaN(Number(v)) ? null : Number(v))
 const str = (v) => { const s = (v ?? '').toString().trim(); return s === '' ? null : s }
 
-// Map one parsed dashboard row -> a purchase_orders record (mapping confirmed:
+// Immutable line identity (WITHOUT occurrence_index).
+const idOf = (rec) => [
+  rec.source, rec.po_number ?? '', rec.location ?? '', rec.order_date ?? '',
+  rec.amount == null ? '' : rec.amount, rec.description ?? '',
+].join(SEP)
+
+// Map one parsed dashboard row -> a purchase_orders record. Mapping confirmed:
 // department=null; local usd_equivalent=null; local amount=BaseAmt (pre-GST),
-// amount_to_vendor=AmountOriginal (total incl GST); import amount=AmountOriginal,
-// usd_equivalent=AmountUSD).
+// amount_to_vendor=AmountOriginal (incl GST); import amount=AmountOriginal,
+// usd_equivalent=AmountUSD. (occurrence_index + line_key added after mapping.)
 function mapRow(r, batchId) {
   const source = r.Source === 'Local' ? 'local' : 'import'
   const location = str(r.Location)
@@ -43,7 +61,6 @@ function mapRow(r, batchId) {
   const order_date = toISODate(r.Date)
   const description = str(r.Description)
   const amount = source === 'local' ? num(r.BaseAmt) : num(r.AmountOriginal)
-  const fingerprint = fnv1a([source, po_number || '', location || '', amount == null ? '' : amount, order_date || '', description || ''].join('|'))
   return {
     upload_batch_id: batchId,
     source,
@@ -53,13 +70,13 @@ function mapRow(r, batchId) {
     status: str(r.Status),
     vendor: str(r.Vendor),
     description,
-    department: null,                                            // not parsed by the dashboard
+    department: null,
     currency: str(r.Currency),
     amount,
     gst_amount: source === 'local' ? num(r.GST) : null,
     amount_to_vendor: source === 'local' ? num(r.AmountOriginal) : null,
-    usd_equivalent: source === 'import' ? num(r.AmountUSD) : null, // local = null (file has none)
-    row_fingerprint: fingerprint,
+    usd_equivalent: source === 'import' ? num(r.AmountUSD) : null,
+    row_fingerprint: fnv1a([source, po_number || '', location || '', amount == null ? '' : amount, order_date || '', description || ''].join('|')),
     raw: r,
   }
 }
@@ -67,7 +84,7 @@ function mapRow(r, batchId) {
 export default function OpexView() {
   const { user } = useAuth()
   const iframeRef = useRef(null)
-  const savingRef = useRef(false) // guard against double-fire
+  const savingRef = useRef(false)
   const [save, setSave] = useState({ state: 'idle', msg: '' }) // idle | saving | success | error
 
   const handleSave = useCallback(async (payload) => {
@@ -78,7 +95,7 @@ export default function OpexView() {
       const importRows = Array.isArray(payload.import) ? payload.import : []
       const total = localRows.length + importRows.length
       if (!total) { setSave({ state: 'error', msg: 'No rows received from the dashboard — nothing saved.' }); return }
-      setSave({ state: 'saving', msg: `Saving ${total} rows to database…` })
+      setSave({ state: 'saving', msg: `Preparing ${total} rows…` })
 
       // 1. Create the upload batch (uploaded_by = auth.uid() so owner-cleanup works).
       const batchRes = await supabase.from('opex_uploads').insert({
@@ -92,39 +109,49 @@ export default function OpexView() {
       if (batchRes.error) { setSave({ state: 'error', msg: `Could not create upload batch: ${batchRes.error.message}` }); return }
       const batchId = batchRes.data.id
 
-      // 2. Map + chunked insert of purchase_orders.
+      // 2. Map, assign per-identity occurrence_index (stable rank over the full set), build line_key.
       const rows = [...localRows, ...importRows].map((r) => mapRow(r, batchId))
-      let inserted = 0
+      const seen = new Map()
+      for (const rec of rows) {
+        const id = idOf(rec)
+        const n = seen.get(id) || 0
+        rec.occurrence_index = n
+        seen.set(id, n + 1)
+      }
+      const keys = await Promise.all(rows.map((rec) => sha256hex(idOf(rec) + SEP + rec.occurrence_index)))
+      rows.forEach((rec, i) => { rec.line_key = keys[i] })
+
+      // 3. Chunked UPSERT — insert-if-new / skip-if-exists (ON CONFLICT DO NOTHING).
+      //    .select() returns only actually-inserted rows, so newRows = real inserts.
+      let newRows = 0
       try {
         for (let i = 0; i < rows.length; i += CHUNK) {
           const chunk = rows.slice(i, i + CHUNK)
-          const { error } = await supabase.from('purchase_orders').insert(chunk)
+          const { data, error } = await supabase.from('purchase_orders')
+            .upsert(chunk, { onConflict: 'line_key', ignoreDuplicates: true })
+            .select('id')
           if (error) throw new Error(error.message)
-          inserted += chunk.length
-          setSave({ state: 'saving', msg: `Saving… ${inserted}/${rows.length} rows` })
+          newRows += data ? data.length : 0
+          setSave({ state: 'saving', msg: `Saving… ${Math.min(i + CHUNK, rows.length)}/${rows.length} processed` })
         }
       } catch (e) {
-        // Roll back: delete the batch (cascade removes any partial purchase_orders).
         const del = await supabase.from('opex_uploads').delete().eq('id', batchId)
         const cleanup = del.error
-          ? ` ⚠️ Batch ${batchId} could NOT be auto-removed (${del.error.message}) — run migration 0019, then delete it via service-role.`
+          ? ` ⚠️ Batch ${batchId} could NOT be auto-removed (${del.error.message}) — run migration 0019, then delete via service-role.`
           : ` Partial batch rolled back (removed) — database left clean.`
-        setSave({ state: 'error', msg: `Save FAILED after ${inserted}/${rows.length} rows: ${e.message}.${cleanup}` })
+        setSave({ state: 'error', msg: `Save FAILED: ${e.message}.${cleanup}` })
         return
       }
 
-      // 3. Verify ACTUAL stored counts from the DB (not just what we sent).
-      const countBy = async (src) => {
-        const { count, error } = await supabase.from('purchase_orders')
-          .select('id', { count: 'exact', head: true }).eq('upload_batch_id', batchId).eq('source', src)
-        return error ? null : count
-      }
-      const localStored = await countBy('local')
-      const importStored = await countBy('import')
-      const totalStored = (localStored ?? 0) + (importStored ?? 0)
+      const skipped = rows.length - newRows
+      // If nothing new was added, the batch contributed nothing — remove the empty batch row.
+      if (newRows === 0) { await supabase.from('opex_uploads').delete().eq('id', batchId) }
+
+      const totalRes = await supabase.from('purchase_orders').select('id', { count: 'exact', head: true })
+      const dbTotal = totalRes.error ? null : totalRes.count
       setSave({
         state: 'success',
-        msg: `Saved ${localStored ?? '?'} local rows + ${importStored ?? '?'} import rows = ${totalStored} total to database.`,
+        msg: `Added ${newRows} new row${newRows === 1 ? '' : 's'} · ${skipped} already existed (skipped) · database total: ${dbTotal ?? '?'}.`,
       })
     } finally {
       savingRef.current = false
@@ -133,7 +160,6 @@ export default function OpexView() {
 
   useEffect(() => {
     function onMessage(e) {
-      // Same-origin guard: only accept messages from our own iframe.
       if (e.origin !== window.location.origin) return
       if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return
       const d = e.data
