@@ -8,6 +8,30 @@ function initialsOf(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
+// Build provenance, inlined at build time by vite.config.js `define`.
+const COMMIT_SHA = typeof __COMMIT_SHA__ !== 'undefined' ? __COMMIT_SHA__ : 'unknown'
+const COMMIT_SHORT = typeof __COMMIT_SHORT__ !== 'undefined' ? __COMMIT_SHORT__ : 'unknown'
+const BUILD_TIME = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : ''
+const COMMIT_URL = COMMIT_SHA !== 'unknown'
+  ? `https://github.com/JDIL-Digital/DDR-Tracker/commit/${COMMIT_SHA}`
+  : null
+
+// Small always-visible "which commit is live" stamp. Short SHA links to the
+// exact GitHub commit; hover shows the full SHA + build timestamp.
+function BuildStamp() {
+  const title = `commit ${COMMIT_SHA}${BUILD_TIME ? ` · built ${BUILD_TIME}` : ''}`
+  return (
+    <div className="build-stamp" title={title}>
+      <span>build</span>
+      {COMMIT_URL ? (
+        <a href={COMMIT_URL} target="_blank" rel="noreferrer" className="mono">{COMMIT_SHORT}</a>
+      ) : (
+        <span className="mono">{COMMIT_SHORT}</span>
+      )}
+    </div>
+  )
+}
+
 // Sidebar — brand, nav, user. The nav items switch the active page; the user
 // block shows the signed-in Google account and a sign-out action.
 export default function Sidebar({ active = 'fleet', onNavigate = () => {} }) {
@@ -74,6 +98,7 @@ export default function Sidebar({ active = 'fleet', onNavigate = () => {} }) {
           <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" /></svg>
         </button>
       </div>
+      <BuildStamp />
     </aside>
   )
 }

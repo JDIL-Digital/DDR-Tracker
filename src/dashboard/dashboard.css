@@ -245,6 +245,33 @@ body {
   fill: none;
   stroke-width: 1.8;
 }
+/* Build provenance: which commit is deployed. */
+.build-stamp {
+  padding: 6px 18px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+.build-stamp span:first-child {
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.build-stamp .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+}
+.build-stamp a.mono {
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--border);
+}
+.build-stamp a.mono:hover {
+  color: var(--green);
+  border-bottom-color: var(--green);
+}
 
 /* ---- Auth: session splash + login screen ---- */
 .auth-splash {
