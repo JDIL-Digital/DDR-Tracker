@@ -80,7 +80,12 @@ async function main() {
 
   const rigsRes = await supabase.from('rigs').select('id, name')
   if (rigsRes.error) throw new Error(`load rigs failed: ${rigsRes.error.message}`)
-  const rigIdByNorm = new Map((rigsRes.data || []).map((r) => [normRig(r.name), r.id]))
+  // Match rigs case/punctuation-insensitively (normRig) and KEEP the full row, so
+  // a stored name that has drifted from the canonical Title-case (e.g. "VIRTUE-1")
+  // still resolves AND can be self-healed below. This pipeline NEVER inserts a rig
+  // (a missing rig is flagged, not auto-created) — so it can never mint a
+  // mis-cased duplicate.
+  const rigByNorm = new Map((rigsRes.data || []).map((r) => [normRig(r.name), r]))
 
   const candidateIds = await listAll(gmail, query)
 
@@ -107,8 +112,24 @@ async function main() {
     if (processed.has(c.id)) { skippedProcessed.push(label); continue }
     if (!c.rig) { flagged.push({ label, reason: `rig unmatched (raw: "${c.rigRaw}")` }); continue }
     if (!c.dateISO) { flagged.push({ label, reason: 'report date not parsed' }); continue }
-    const rigId = rigIdByNorm.get(normRig(c.rig))
-    if (!rigId) { flagged.push({ label, reason: `rig "${c.rig}" not in rigs table` }); continue }
+    const rigRow = rigByNorm.get(normRig(c.rig))
+    if (!rigRow) { flagged.push({ label, reason: `rig "${c.rig}" not in rigs table — NOT auto-created (prevents a mis-cased duplicate); add the rig first.` }); continue }
+    const rigId = rigRow.id
+
+    // Self-heal: if the stored rig name has drifted from the canonical Title-case
+    // that matchRig() returns (e.g. a legacy "VIRTUE-1"), normalize it in place so
+    // the fleet label converges and the UI never shows an off-case name again.
+    // Guarded by normRig-equality (same rig) so it only ever fixes casing/spacing.
+    let healNote = ''
+    if (rigRow.name !== c.rig) {
+      if (doSave) {
+        const upd = await supabase.from('rigs').update({ name: c.rig }).eq('id', rigId)
+        if (upd.error) healNote = ` [rig-name heal FAILED: ${truncate(upd.error.message, 40)}]`
+        else { healNote = ` [rig name normalized "${rigRow.name}"→"${c.rig}"]`; rigRow.name = c.rig }
+      } else {
+        healNote = ` [would normalize rig name "${rigRow.name}"→"${c.rig}"]`
+      }
+    }
 
     const exist = await supabase.from('maintenance_reports').select('id, extraction_status').eq('rig_id', rigId).eq('report_date', c.dateISO).maybeSingle()
     if (exist.error) { flagged.push({ label, reason: `existence check failed: ${exist.error.message}` }); continue }
@@ -120,7 +141,7 @@ async function main() {
     // --- Ingest (create row) if none exists ---
     if (!reportId) {
       if (!doSave) {
-        results.push({ rig: c.rig, date: c.dateISO, action: 'would INGEST (download+store+insert)' + (doExtract ? ' + would extract' : '') })
+        results.push({ rig: c.rig, date: c.dateISO, action: 'would INGEST (download+store+insert)' + (doExtract ? ' + would extract' : '') + healNote })
         continue
       }
       const att = c.docx[0]
@@ -176,7 +197,7 @@ async function main() {
       try { await markProcessed(supabase, c.id, 'dmr', rigId, c.dateISO) } catch (e) { action += ` [marker warn: ${e.message}]` }
     }
 
-    results.push({ rig: c.rig, date: c.dateISO, action })
+    results.push({ rig: c.rig, date: c.dateISO, action: action + healNote })
   }
 
   // --- Summary ---

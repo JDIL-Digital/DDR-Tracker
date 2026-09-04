@@ -17,6 +17,11 @@ export const ROSTER = ['Discovery-1', 'Virtue-1', 'Jindal Star', 'Jindal Explore
 
 export const normRig = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
+// Resolve a raw rig label to its CANONICAL Title-case spelling from ROSTER — the
+// one and only spelling that should ever reach the rigs table. Matching is
+// case/punctuation-insensitive (via normRig), so "Virtue 1", "VIRTUE-1" and
+// "virtue1" all resolve to "Virtue-1". Callers must persist/compare THIS value,
+// never the raw subject text, so the DB can never accumulate mis-cased variants.
 export function matchRig(raw) {
   const n = normRig(raw)
   if (!n) return null
