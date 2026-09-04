@@ -29,18 +29,36 @@ export async function loadMaintenanceActivities(reportId) {
   return data || []
 }
 
-// Activities across several reports (for the "Overall" cumulative scope). Carries
-// report_id so the caller can attribute each activity to its DMR.
+// Activities across several reports (for the "Overall" cumulative scope, or a
+// single selected report). Carries report_id so the caller can attribute each
+// activity to its DMR.
+//
+// PAGINATED: PostgREST caps any single response at db-max-rows (1000 on Supabase).
+// A rig with a long history can exceed 1000 cumulative activities, and an
+// unpaginated query would SILENTLY drop the overflow — dropping exactly the
+// newest rows under an ascending sort, so the latest report renders empty. We
+// therefore page with .range() until a short page proves we've read them all.
+// Order is (created_at, id): created_at for display order, id as a unique
+// tiebreaker so paging can never skip or duplicate a row across page boundaries.
+const ACT_PAGE = 1000
 export async function loadMaintenanceActivitiesForReports(reportIds) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
   if (!reportIds || !reportIds.length) return []
-  const { data, error } = await supabase
-    .from('maintenance_activities')
-    .select('id, report_id, department, chief_in_charge, activity_text, activity_kind, status, created_at')
-    .in('report_id', reportIds)
-    .order('created_at', { ascending: true })
-  if (error) throw new Error(error.message)
-  return data || []
+  const all = []
+  for (let from = 0; ; from += ACT_PAGE) {
+    const { data, error } = await supabase
+      .from('maintenance_activities')
+      .select('id, report_id, department, chief_in_charge, activity_text, activity_kind, status, created_at')
+      .in('report_id', reportIds)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + ACT_PAGE - 1)
+    if (error) throw new Error(error.message)
+    if (!data || !data.length) break
+    all.push(...data)
+    if (data.length < ACT_PAGE) break   // short page => last page
+  }
+  return all
 }
 
 // Admin: correct a last-day activity's classification.

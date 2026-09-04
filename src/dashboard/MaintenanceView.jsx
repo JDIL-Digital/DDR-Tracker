@@ -93,16 +93,23 @@ export default function MaintenanceView() {
   }, [rigReports, selectedReport])
   const dateById = useMemo(() => new Map(rigReports.map((r) => [r.id, r.report_date])), [rigReports])
 
-  // load activities for all reports up to selected (covers both scopes)
+  // Load activities for the active scope only:
+  //  • "this"    -> ONLY the selected report (small + fast; the default view)
+  //  • "overall" -> every report up to the selected date (paginated, uncapped)
+  // Loading just the selected report for "this" also avoids re-fetching a rig's
+  // whole (growing) history on every visit.
   useEffect(() => {
     setActs(null); setActErr(null)
-    if (!reportsUpTo.length) return
+    const ids = scope === 'this'
+      ? (selectedReport ? [selectedReport.id] : [])
+      : reportsUpTo.map((r) => r.id)
+    if (!ids.length) return
     let cancelled = false
-    loadMaintenanceActivitiesForReports(reportsUpTo.map((r) => r.id))
+    loadMaintenanceActivitiesForReports(ids)
       .then((a) => { if (!cancelled) setActs(a) })
       .catch((e) => { if (!cancelled) setActErr(e.message) })
     return () => { cancelled = true }
-  }, [reportsUpTo])
+  }, [scope, selectedReport, reportsUpTo])
 
   const allActs = useMemo(() => (acts || []).map((a) => ({ ...a, ...matchKeywords(a.activity_text) })), [acts])
   const thisActs = useMemo(() => (selectedReport ? allActs.filter((a) => a.report_id === selectedReport.id) : []), [allActs, selectedReport])
