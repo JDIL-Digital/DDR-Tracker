@@ -77,6 +77,40 @@ Goal: monitor spend, track vendors, catch overspend, report to management. Data 
 ## STANDING TODO
 - Disable the old exposed OAuth secret (...l7Iw) in Google Cloud.
 - Maintenance admin tools (upload/delete/edit-status) as a collapsed admin section.
+- **MDR-as-NPT (OPEN QUESTION):** 0022 set is_npt = (condition = 'EBDR') only, so the single MDR code
+  (1C) is is_npt=FALSE. Pending Jindal-team confirmation of whether MDR should count as NPT. If yes,
+  a follow-up migration sets is_npt = (condition in ('EBDR','MDR')). Do NOT assume it.
+
+## SESSION 2026-09-07 — Virtue-1 blank fix, canonical rig names, authoritative IADC codes
+All merged to main (PRs #22–#25); main at 6e5986d after this session.
+- **Virtue-1 Maintenance tab was BLANK (root cause = 1000-row PostgREST cap).** The Maintenance view
+  loaded every activity up to the selected date in ONE query ordered created_at ASC. PostgREST caps
+  a response at db-max-rows (1000). Virtue-1 (longest history, 1113 cumulative activities) overflowed;
+  under ascending sort the NEWEST rows (the selected day's) got silently dropped, so its latest report
+  rendered zero activities / all-zero KPIs (no error). **Fix (0-migration, client only):
+  loadMaintenanceActivitiesForReports now PAGINATES with .range() in 1000-row pages (order created_at,id
+  — id as unique tiebreaker); and "This report" scope loads ONLY the selected report, full history only
+  for "Overall".** This is a LATENT bug for every rig past ~1000 cumulative activities — now fixed for all.
+- **Build-SHA stamp (0-migration):** vite.config.js inlines git SHA via `define`; sidebar shows
+  `build <sha>` (links to the GitHub commit). Use it to confirm the live Replit deploy == main after a
+  publish. (During this session the Replit checkout was found STUCK on 5ce7fa5 — a commit NOT in this
+  repo — so publishes shipped stale code until fixed; the stamp is how we prove currency now.)
+- **Canonical rig names — migration 0021 (APPLIED):** root cause of "VIRTUE-1" vs "Virtue-1" was the
+  DDR save RPC (0009) find-or-create using CASE-SENSITIVE `where name = v_rig_name`, which inserts a
+  mis-cased duplicate rig. 0021 replaces save_ddr_report so the rig lookup is case/punctuation-
+  insensitive (SQL mirror of dmr-match normRig); reuses the canonical row, never mints a duplicate.
+  Also ingest-dmr.js self-heals a drifted stored name to canonical Title-case on --save and NEVER
+  auto-creates a rig. (The bad uppercase row was also fixed directly via a one-row UPDATE this session:
+  VIRTUE-1 -> Virtue-1.) **0021 has been run in Supabase.**
+- **Authoritative IADC codes — migration 0022 (FILE ON MAIN; RUN STATUS: user-run):** aligns code_master
+  with design/IADC_Code_Master_v1.xlsx (the Downloads copy was the authoritative newer one; the in-repo
+  design/ copy was OLD). Same 75 codes; 3 condition changes: 1C NODR->MDR, 7A NODR->EBDR, 7B NODR->EBDR.
+  Totals RODR 27 / NODR 37 / EBDR 10 / MDR 1. Extends the condition CHECK to allow 'MDR'; sets all 75
+  review_status='confirmed'; recomputes is_npt=(condition='EBDR') (so 7A/7B now count as NPT; 1C/MDR
+  does not — see MDR-as-NPT open question). A DO-block asserts totals 27/37/10/1 or rolls back.
+  Benchmarks reconciled: DB's 13 already match the file's 13 real benchmarks (the file's "14th row" is a
+  contract note) — no benchmark change. NOTE: 0022 is INDEPENDENT of 0021 (different objects: table vs
+  function) — either order is safe.
 
 ## DMR AUTO-INGEST PIPELINE — FULLY DEPLOYED & AUTOMATIC (done this session)
 The daily maintenance report (DMR) pipeline is LIVE and runs automatically. No manual step needed.
@@ -248,7 +282,11 @@ NOT "JDIL-Navigation" — confirm before any SQL.
 - `0001_init` · `0002_seed_codes` (draft, replaced by 0005) · `0003_public_read` (superseded by 0008)
   · `0005_iadc_codes` · `0006_profiles` · `0007_bootstrap_admin` · `0008_rls_lockdown`
   · `0009_save_ddr_report` (atomic RPC) · `0010_rig_order` · `0011_security_hardening`
-  · `0012_well_plans` · `0013_well_plans_manage`. **Next: `0014` adds `planned_depth_points jsonb`.**
+  · `0012_well_plans` · `0013_well_plans_manage` · `0014_planned_depth_points`
+  · `0015_maintenance_reports` · `0016_processed_emails` · `0017_allow_advisor`
+  · `0018_opex_purchase_orders` · `0019_opex_batch_cleanup` · `0020_opex_line_key`
+  · `0021_rig_find_or_create_ci` (case-insensitive rig find-or-create — APPLIED)
+  · `0022_iadc_codes_authoritative` (75 IADC conditions incl. MDR + all confirmed; run manually).
 ### Root / config
 - `.env.local` — secrets (git-ignored). `.npmrc` — yarnpkg mirror. `.gitignore`, `index.html`,
   `vite.config.js`, `package.json`.
