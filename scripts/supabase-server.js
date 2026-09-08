@@ -69,6 +69,12 @@ export async function saveReport(data, { validationPassed }) {
   if (!data.rig_name || String(data.rig_name).trim() === '') {
     throw new Error('rig_name is empty; cannot resolve a rig.')
   }
+  // The extractor constrains rig_name to the canonical roster or "UNKNOWN". Never
+  // let an unresolved rig mint a bogus rig row — refuse the save (report stays in
+  // storage/Gmail for manual attribution). raw_rig_name is preserved in raw_extract.
+  if (String(data.rig_name).trim().toUpperCase() === 'UNKNOWN') {
+    throw new Error('rig_name is UNKNOWN (extractor could not match one of the 6 canonical rigs); not saved — needs manual attribution.')
+  }
 
   // Source-of-truth code list is the DB code_master (also what the FK enforces).
   const codeRows = await must(supabase.from('code_master').select('code'), 'load code_master')
