@@ -91,6 +91,8 @@ export async function saveReport(data, { validationPassed }) {
     time_to: a.time_to ?? null,
     hrs: a.hrs ?? null,
     code: validCodes.has(a.code) ? a.code : null,
+    raw_code: a.raw_code ?? null,          // Stage B: the bare form code as written
+    activity_date: a.activity_date ?? null, // Stage B: ownership-by-date; null in Stage A
     depth_in_m: a.depth_in_m ?? null,
     depth_out_m: a.depth_out_m ?? null,
     remarks: a.remarks ?? null,
@@ -105,14 +107,38 @@ export async function saveReport(data, { validationPassed }) {
     closing: r.closing ?? null,
   }))
 
+  // Header fields live under data.header (extract-ddr Stage A). Fall back to
+  // top-level keys for backward-compat with any older caller shape.
+  const h = data.header || {}
+  const hv = (k) => h[k] ?? data[k] ?? null
   const payload = {
     rig_name: data.rig_name,
-    well_no: data.well_no ?? null,
-    report_no: data.report_no ?? null,
     report_date: data.report_date,
-    depth_md_m: data.depth_md_m ?? null,
-    day_meterage_m: data.day_meterage_m ?? null,
-    fuel_consumed_kl: data.fuel_consumed_kl ?? null,
+    // pre-existing columns (now actually populated)
+    well_no: hv('well_no'),
+    report_no: hv('report_no'),
+    days_on_location: hv('days_on_location'),
+    days_on_well: hv('days_on_well'),
+    depth_md_m: hv('depth_md_m'),
+    depth_tvd_m: hv('depth_tvd_m'),
+    day_meterage_m: hv('day_meterage_m'),
+    present_operation: hv('present_operation'),
+    next_operation: hv('next_operation'),
+    fuel_open_kl: hv('fuel_open_kl'),
+    fuel_recv_kl: hv('fuel_recv_kl'),
+    fuel_consumed_kl: hv('fuel_consumed_kl'),
+    fuel_close_kl: hv('fuel_close_kl'),
+    // new DDR columns (migration 0023)
+    spud_date: hv('spud_date'),
+    move_in_date: hv('move_in_date'),
+    oim: hv('oim'),
+    pob_total: hv('pob_total'),
+    lti_days: hv('lti_days'),
+    diesel_rob_kl: hv('diesel_rob_kl'),
+    downtime_daily_hrs: hv('downtime_daily_hrs'),
+    downtime_cum_hrs: hv('downtime_cum_hrs'),
+    daily_cost: hv('daily_cost'),
+    cumulative_cost: hv('cumulative_cost'),
     extraction_status: extractionStatus,
     raw_extract: data,
     activities: activityRows,
