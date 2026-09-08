@@ -100,6 +100,25 @@ export async function loadCodeMaster() {
   return data || []
 }
 
+// --- Canonical rig roster (the 6 known rigs) --------------------------------
+// Loaded from the LIVE rigs table (authoritative, sort_order); falls back to the
+// known 6 if the query is unavailable. Claude maps the (possibly typo'd) sheet
+// rig name to EXACTLY one of these — never a new variant.
+const FALLBACK_ROSTER = [
+  'Discovery-1', 'Virtue-1', 'Jindal Star', 'Jindal Explorer', 'Jindal Pioneer', 'Jindal Supreme',
+]
+export async function loadRigRoster() {
+  try {
+    const sb = getServerClient()
+    const { data, error } = await sb.from('rigs').select('name, sort_order').order('sort_order')
+    if (error) throw error
+    const names = (data || []).map((r) => r.name).filter(Boolean)
+    return names.length ? names : FALLBACK_ROSTER
+  } catch {
+    return FALLBACK_ROSTER
+  }
+}
+
 // --- Structured-output JSON schema (matches the DB) --------------------------
 const num = { type: ['number', 'null'] }
 const str = { type: ['string', 'null'] }
@@ -185,10 +204,11 @@ const SCHEMA = {
   ],
 }
 
-function buildPrompt(cellLines, codes) {
+function buildPrompt(cellLines, codes, roster) {
   const codeList = codes
     .map((c) => `  ${c.code} = ${c.description} [${c.condition || '—'}${c.is_npt ? ', NPT' : ''}]`)
     .join('\n')
+  const rigList = (roster || []).map((r) => `  - ${r}`).join('\n')
 
   return [
     'You are extracting ONE daily drilling report (DDR) into standardized JSON.',
@@ -199,7 +219,17 @@ function buildPrompt(cellLines, codes) {
     '',
     'GENERAL RULES:',
     '- report_date MUST be ISO format yyyy-mm-dd.',
-    '- rig_name: copy the rig name as written on the sheet (do not correct spelling/case).',
+    '',
+    'RIG NAME (constrained to the known fleet):',
+    '- The report belongs to EXACTLY ONE of these canonical rigs:',
+    rigList,
+    '- Set `rig_name` to the EXACT canonical name it matches, resolving typos, case, spacing',
+    '  and punctuation. Example: a sheet saying "JINADAL STAR" -> "Jindal Star";',
+    '  "JINDAL SUPREME" -> "Jindal Supreme". Return the name spelled EXACTLY as in the list',
+    '  above — never a new spelling or variant.',
+    '- Set `raw_rig_name` to the rig name EXACTLY as written on the sheet (for audit).',
+    '- If you genuinely cannot confidently match the sheet to one of the canonical rigs, set',
+    '  `rig_name` to "UNKNOWN" (do NOT guess a rig).',
     '',
     'HEADER FIELDS (-> header{}): locate each by its LABEL and read the adjacent value.',
     'Match on the label text, NOT cell position (layouts differ between rigs). Return EVERY',
@@ -373,7 +403,16 @@ export async function extractDDR(inputFile) {
 
   const cellLines = excelToLines(inputFile)
   const codes = await loadCodeMaster()
+  const roster = await loadRigRoster()
   const client = new Anthropic({ apiKey })
+
+  // Constrain rig_name to the canonical roster (+ "UNKNOWN") via a schema enum so
+  // Claude can never invent a variant; add raw_rig_name for audit. Built per run
+  // so the roster stays authoritative (from the live rigs table).
+  const schema = structuredClone(SCHEMA)
+  schema.properties.rig_name = { type: 'string', enum: [...roster, 'UNKNOWN'] }
+  schema.properties.raw_rig_name = { type: 'string' }
+  if (!schema.required.includes('raw_rig_name')) schema.required = [...schema.required, 'raw_rig_name']
 
   const response = await client.messages.create({
     model: MODEL,
@@ -382,8 +421,8 @@ export async function extractDDR(inputFile) {
     system:
       'You are a meticulous data-extraction engine for oil & gas daily drilling reports. ' +
       'Return only what the source supports; never fabricate values.',
-    messages: [{ role: 'user', content: buildPrompt(cellLines, codes) }],
-    output_config: { format: { type: 'json_schema', schema: SCHEMA } },
+    messages: [{ role: 'user', content: buildPrompt(cellLines, codes, roster) }],
+    output_config: { format: { type: 'json_schema', schema } },
   })
 
   const textBlock = response.content.find((b) => b.type === 'text')
@@ -423,13 +462,23 @@ export async function extractDDR(inputFile) {
   // STORE ONLY the own-day block — the next report persists the next morning as its own day.
   result.activities = ownDay
 
-  return { result, codes, cellCount: cellLines.length }
+  return { result, codes, roster, cellCount: cellLines.length }
 }
 
 // --- Validation --------------------------------------------------------------
-export function validate(result, codes) {
+export function validate(result, codes, roster = FALLBACK_ROSTER) {
   const validCodes = new Set(codes.map((c) => c.code))
+  const rigSet = new Set(roster)
   const checks = []
+
+  const rigOk = rigSet.has(result.rig_name)
+  checks.push({
+    name: 'rig_name is one of the canonical rigs (typo/case resolved)',
+    pass: rigOk,
+    detail: rigOk
+      ? `${JSON.stringify(result.rig_name)} (raw: ${JSON.stringify(result.raw_rig_name)})`
+      : `unresolved rig_name=${JSON.stringify(result.rig_name)} (raw: ${JSON.stringify(result.raw_rig_name)}) — not one of the 6`,
+  })
 
   const requiredPresent =
     result.rig_name != null &&
@@ -515,13 +564,14 @@ async function main() {
   console.log(`Input file : ${inputFile}`)
   console.log(`Mode       : ${doSave ? 'SAVE (writing to Supabase)' : 'DRY RUN (print only) — pass --save to write'}`)
 
-  const { result, codes, cellCount } = await extractDDR(inputFile)
+  const { result, codes, roster, cellCount } = await extractDDR(inputFile)
   console.log(`Cells read : ${cellCount} non-empty cells`)
   console.log(`Code master: ${codes.length} valid activity codes loaded`)
+  console.log(`Rig roster : ${roster.join(', ')}`)
 
   console.log('\n===================== EXTRACTED HEADER ====================')
-  console.log(`rig_name    : ${JSON.stringify(result.rig_name)}`)
-  console.log(`report_date : ${JSON.stringify(result.report_date)}`)
+  console.log(`rig_name     : ${JSON.stringify(result.rig_name)}   (raw_rig_name: ${JSON.stringify(result.raw_rig_name)})`)
+  console.log(`report_date  : ${JSON.stringify(result.report_date)}`)
   console.log(JSON.stringify(result.header, null, 2))
 
   const v = result._verify || {}
@@ -544,7 +594,7 @@ async function main() {
   console.log('\n----------------- OVERLAP RECONCILIATION -----------------')
   console.log(`own-day ${Number(v.ownDayHrs || 0).toFixed(2)}h + next-morning ${Number(v.nextMorningHrs || 0).toFixed(2)}h = total ${Number(v.totalHrs || 0).toFixed(2)}h`)
 
-  const { checks, warnings, totalHrs } = validate(result, codes)
+  const { checks, warnings, totalHrs } = validate(result, codes, roster)
 
   console.log('\n===================== VALIDATION REPORT ==================')
   let allPass = true
