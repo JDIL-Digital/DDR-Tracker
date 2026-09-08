@@ -112,8 +112,10 @@ All merged to main (PRs #22–#25); main at 6e5986d after this session.
   contract note) — no benchmark change. NOTE: 0022 is INDEPENDENT of 0021 (different objects: table vs
   function) — either order is safe.
 
-## DDR (Daily Drilling Report) FEATURE — FOUNDATION DONE (extractor NOT built yet)
+## DDR (Daily Drilling Report) FEATURE — FOUNDATION + FORMAT REFERENCE
 Goal: management wants full DDR data on the dashboard. DDRs are drilling reports (vs DMR=maintenance).
+(The extractor is now BUILT & DB-verified — see "DDR EXTRACTOR — COMPLETE" below; this section is the
+format/schema/dashboard reference.)
 
 - FORMAT (confirmed from real reports JSUP_02-09 + JINDAL_STAR_06-09): dense hand-filled Excel form
   (~214x256, sheet "DDR" or "DPR"), scattered label/value layout. Subject: RIG_DDR_DD-MM-YYYY (once
@@ -153,13 +155,43 @@ Goal: management wants full DDR data on the dashboard. DDRs are drilling reports
   excelToLines() (lossless A1=value grid dump) is the method to extend. Pipeline mirrors DMR:
   ddr-match.js + ingest-ddr.js, new bucket drilling-reports, reuse processed_emails (kind='ddr').
 
-## DDR — NEXT STEPS (in order)
-1. Build the DDR extractor (extend extract-ddr.js): header fields + activity log with code-mapping +
-   30h own-day-only handling + time normalization. VERIFY every field/hour against real reports
-   (JSUP_02-09, JINDAL_STAR_06-09) before trusting. Incremental + number-verified (like OPEX/DMR).
-2. DDR pipeline (ddr-match.js RIG_DDR_DATE + RDDR supersede, ingest-ddr.js, 7:30+8:30 triggers,
-   add to JDIL DMR Scheduler Replit project).
-3. Fleet dashboard (A/B/C/D above) reading verified data.
+## DDR EXTRACTOR — COMPLETE & DB-VERIFIED (extractor done; ingest pipeline is next)
+The DDR extractor (extend of extract-ddr.js) is built, tested against real reports, and proven by a
+real --save to the DB. Stages:
+- Stage A (header): DB-backed loadCodeMaster from live code_master (authoritative 75 + condition),
+  nested non-nullable-string SCHEMA + coerceHeader (numbers/ISO dates/null), label-based header
+  extraction (robust to layout shifts), report_no correctly null when blank, warn→proper validation.
+  Header fields: well_no, report_no, report_date, depth_md_m, days_on_location, days_on_well,
+  present_operation, spud_date, move_in_date, oim, pob_total, lti_days (= days SINCE last LTI, an
+  injury-free streak — label on dashboard as "Days Without LTI"), fuel_open/recv/consumed/close_kl,
+  diesel_rob_kl, downtime_daily/cum_hrs, daily/cumulative_cost.
+- Stage B (activity log): TWO-BLOCK ownership-by-date. Each DDR = own day 00:00-24:00 + next morning
+  00:00-06:00 (~30h). Extractor parses BOTH but stores ONLY own-day (activity_date = report_date);
+  next-morning DISCARDED (next day's report stores it → no double-count). Bare family code (rig
+  writes "6","23" not "6A") → AI-mapped to specific code_master IADC code via description; stores
+  raw_code + mapped code; code=null + needs_review if not confident. Times normalized to HH:MM. Mud
+  "Time"/fluid-properties table explicitly excluded. Own-day hours must sum ~24 (EXCLUSIVE ±0.5, so
+  24.5 flags) → needs_review but STILL SAVES.
+- Rig-name normalization: SCHEMA enum constrains rig_name to the 6 canonical names (loaded from rigs
+  table) + "UNKNOWN"; Claude resolves typos (JINADAL STAR → Jindal Star) but CANNOT invent a variant.
+  raw_rig_name preserved for audit. saveReport refuses to save UNKNOWN (never mints a bogus rig).
+- supabase-server.js payload flattens all header fields + per-activity raw_code/activity_date; writes
+  via save_ddr_report RPC (0023).
+- DB-VERIFIED via real --save: JSUP_02-09 → Jindal Supreme, ok, 13 own-day activities, 0 next-morning;
+  JINDAL_STAR_06-09 → Jindal Star (from typo), needs_review (24.5h), 7 own-day activities. Both matched
+  existing rigs (no duplicate created), rigs table still exactly 6, slot_uidx clean. TWO REAL ROWS
+  currently in DB (kept as genuine data): Jindal Supreme 2026-09-02, Jindal Star 2026-09-06.
+- Migrations on main: 0023 (schema+RPC). Commits on main: Stage A dd96075, Stage B 84bf0a0, rig-norm
+  f29df1f.
+
+## DDR — REMAINING (next)
+1. Ingest pipeline (mirrors DMR): ddr-match.js (subject RIG_DDR_DD-MM-YYYY; RDDR_DATE = revision,
+   supersedes via RPC upsert on (rig_id, report_date)), ingest-ddr.js (Gmail scan → download xlsx →
+   Storage bucket "drilling-reports" → save_ddr_report, --extract chains extract-ddr.js), idempotent
+   via processed_emails kind='ddr'. Add to JDIL DMR Scheduler Replit project, triggers 7:30 + 8:30 AM.
+2. Fleet dashboard (spec A/B/C/D already in doc) reading the DDR data — INCLUDING a visible
+   needs_review / hours-discrepancy indicator on flagged rigs' cards (e.g. Star's 24.5h).
+3. OPEN: MDR-as-NPT decision (still pending team).
 
 ## DMR AUTO-INGEST PIPELINE — FULLY DEPLOYED & AUTOMATIC (done this session)
 The daily maintenance report (DMR) pipeline is LIVE and runs automatically. No manual step needed.
