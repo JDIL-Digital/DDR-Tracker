@@ -112,6 +112,55 @@ All merged to main (PRs #22–#25); main at 6e5986d after this session.
   contract note) — no benchmark change. NOTE: 0022 is INDEPENDENT of 0021 (different objects: table vs
   function) — either order is safe.
 
+## DDR (Daily Drilling Report) FEATURE — FOUNDATION DONE (extractor NOT built yet)
+Goal: management wants full DDR data on the dashboard. DDRs are drilling reports (vs DMR=maintenance).
+
+- FORMAT (confirmed from real reports JSUP_02-09 + JINDAL_STAR_06-09): dense hand-filled Excel form
+  (~214x256, sheet "DDR" or "DPR"), scattered label/value layout. Subject: RIG_DDR_DD-MM-YYYY (once
+  daily, before 9 AM); revised = RIG_RDDR_DD-MM-YYYY. Filename: Rigname_DD-MM-YYYY. Two ingest
+  triggers planned: 7:30 + 8:30 AM.
+- CRITICAL FORMAT FACTS:
+  * Activity log: rig writes a BARE FAMILY CODE (e.g. "6","5","23") in the code column, NOT the full
+    IADC sub-code. AI extractor must map bare code + activity description → specific code_master code
+    (6→6A unambiguous; families 21/22/23/24 → pick sub-code from description), storing raw_code (as
+    written) + code (mapped). needs_review if low confidence. Rigs may change/standardize codes later.
+  * 30-HOUR OVERLAP: each DDR covers its own day 00:00-24:00 PLUS next morning 00:00-06:00.
+    Consecutive reports overlap on that 6h. SOLUTION = OWNERSHIP-BY-DATE: each report persists ONLY
+    its own-day activities (activity_date == report_date); the next-morning block is parsed for
+    hour-reconciliation but NOT stored (next report stores it as its own day). Counted-once by
+    construction, re-extract safe. Extractor MUST: normalize times to HH:MM, assign activity_date
+    (own-day rows only), skip/omit next-morning block from stored rows.
+- IADC CODES (migration 0022, applied+on main): code_master now authoritative — RODR 27, NODR 37,
+  EBDR 10, MDR 1 (75 codes), all review_status=confirmed. Conditions drive billing/KPI classification.
+  is_npt = (condition='EBDR'); 7A/7B now EBDR (=NPT); 1C=MDR (is_npt=false, MDR-as-NPT still pending
+  team confirmation). benchmarks table (13 rows) matched.
+- SCHEMA (migration 0023, applied+on main, rpc_ok verified true): extended existing reports +
+  activities tables (reused, not parallel). reports += spud_date, move_in_date, oim, pob_total,
+  lti_days (actual LTI days), diesel_rob_kl, downtime_daily_hrs, downtime_cum_hrs, daily_cost,
+  cumulative_cost. activities += rig_id, activity_date, raw_code. Defensive unique index
+  activities_slot_uidx (rig_id, activity_date, time_from) — fail-loud, NO on-conflict-do-nothing.
+  save_ddr_report RPC updated to write all new columns under ownership model (preserves 0021's
+  case-insensitive rig + RDDR supersede on (rig_id,report_date) + atomicity). Daily diesel
+  consumption reuses existing fuel_consumed_kl.
+- FLEET DASHBOARD SPEC (management's ask, to build AFTER extractor):
+  A) Fleet totals below all rigs: Total ODR(RODR), Total NODR, Total EBDR, Total Diesel ROB, Reports
+     Received (count).
+  B) Per rig card: Report No, POB (personnel on board), Well Name, No. LTI days, Daily Diesel
+     Consumption, Monthly Rig Downtime.
+  C) Downtime-per-rig bar chart: cumulative RODR/NODR/EBDR hours per well, growing daily, colour-coded.
+  D) NPT by cause per rig: NPT (NODR+EBDR) grouped by activity-code cause, with rig name + OIM + date.
+- USE AI EXTRACTION (Claude) — cost acceptable (~20-40c/day for 6 rigs). Existing extract-ddr.js +
+  excelToLines() (lossless A1=value grid dump) is the method to extend. Pipeline mirrors DMR:
+  ddr-match.js + ingest-ddr.js, new bucket drilling-reports, reuse processed_emails (kind='ddr').
+
+## DDR — NEXT STEPS (in order)
+1. Build the DDR extractor (extend extract-ddr.js): header fields + activity log with code-mapping +
+   30h own-day-only handling + time normalization. VERIFY every field/hour against real reports
+   (JSUP_02-09, JINDAL_STAR_06-09) before trusting. Incremental + number-verified (like OPEX/DMR).
+2. DDR pipeline (ddr-match.js RIG_DDR_DATE + RDDR supersede, ingest-ddr.js, 7:30+8:30 triggers,
+   add to JDIL DMR Scheduler Replit project).
+3. Fleet dashboard (A/B/C/D above) reading verified data.
+
 ## DMR AUTO-INGEST PIPELINE — FULLY DEPLOYED & AUTOMATIC (done this session)
 The daily maintenance report (DMR) pipeline is LIVE and runs automatically. No manual step needed.
 
@@ -286,7 +335,9 @@ NOT "JDIL-Navigation" — confirm before any SQL.
   · `0015_maintenance_reports` · `0016_processed_emails` · `0017_allow_advisor`
   · `0018_opex_purchase_orders` · `0019_opex_batch_cleanup` · `0020_opex_line_key`
   · `0021_rig_find_or_create_ci` (case-insensitive rig find-or-create — APPLIED)
-  · `0022_iadc_codes_authoritative` (75 IADC conditions incl. MDR + all confirmed; run manually).
+  · `0022_iadc_codes_authoritative` (75 IADC conditions incl. MDR + all confirmed; applied)
+  · `0023_ddr_report_fields` (reports + activities DDR columns + activities_slot_uidx + save_ddr_report
+    RPC ownership-by-date; applied, rpc_ok verified).
 ### Root / config
 - `.env.local` — secrets (git-ignored). `.npmrc` — yarnpkg mirror. `.gitignore`, `index.html`,
   `vite.config.js`, `package.json`.
