@@ -145,15 +145,17 @@ const SCHEMA = {
         type: 'object',
         additionalProperties: false,
         properties: {
+          block: { type: 'string', description: '"own_day" (00:00-24:00) or "next_morning" (00:00-06:00)' },
           time_from: str,
           time_to: str,
           hrs: { type: 'number' },
-          code: { type: 'string' },
+          raw_code: { type: 'string', description: 'the bare family code as written on the sheet' },
+          code: { type: ['string', 'null'], description: 'mapped code_master code; null if not confident' },
           depth_in_m: num,
           depth_out_m: num,
           remarks: { type: 'string' },
         },
-        required: ['time_from', 'time_to', 'hrs', 'code', 'depth_in_m', 'depth_out_m', 'remarks'],
+        required: ['block', 'time_from', 'time_to', 'hrs', 'raw_code', 'code', 'depth_in_m', 'depth_out_m', 'remarks'],
       },
     },
     inventory: {
@@ -224,16 +226,32 @@ function buildPrompt(cellLines, codes) {
     '  downtime_cum_hrs   <- "Monthly Rig Downtime" -> cumulative',
     '  daily_cost <- "Daily Cost"            cumulative_cost <- "Cum Cost"',
     '',
-    'ACTIVITIES (the time-log / operations table -> activities[]):',
-    '- One row per time interval: time_from, time_to, hours (hrs), depth in/out if present,',
-    '  and the remark describing the operation.',
-    '- Activities should together account for the full 24-hour day.',
-    '- Map each activity to the CLOSEST valid code from the list below.',
-    '- If the remark clearly states a CAUSE, choose the MOST SPECIFIC matching code, not a',
-    '  generic one. Example: a remark of "WOW" or "waiting on weather" maps to the',
-    '  weather-waiting code (18), NOT the generic waiting-on-decision/instructions code (21).',
-    '- If the correct code is genuinely ambiguous, pick the closest one AND keep the full',
-    '  original remark text in `remarks` so a human can verify the mapping.',
+    'ACTIVITIES (the operations time-log -> activities[]):',
+    'The time-log appears in TWO blocks, each under "FROM"/"TO" column headers:',
+    '  * an OWN-DAY block headed "00:00 TO 24:00"  (the report\'s own calendar day), and',
+    '  * a NEXT-MORNING block headed "00:00 to 06:00" (the following day\'s early hours;',
+    '    its header may even show the next date).',
+    'Parse EVERY row of BOTH blocks. Tag each row with `block`: "own_day" for rows in the',
+    '00:00-24:00 block, "next_morning" for rows in the 00:00-06:00 block. If the block',
+    'structure is genuinely unclear, tag rows "own_day" (never drop a row).',
+    'DO NOT extract the fluid/mud-properties table (headed "Time" with columns like M/Wt-PPG,',
+    'VIS, PV/YP, R6/R3, GEL) — that is NOT the operations log; skip it entirely.',
+    '',
+    'For each activity row output: block, time_from, time_to (clock times as written — they',
+    'are normalized to HH:MM downstream), hrs (the duration from the hours column, a decimal),',
+    'depth_in_m / depth_out_m if present, remarks (the full operation description), and the',
+    'codes as follows:',
+    '- raw_code = the BARE code exactly as written in the code column (e.g. "6", "23", "16").',
+    '- code = the specific code_master code it maps to. The sheet writes a bare FAMILY number,',
+    '  not the full IADC sub-code, so map using the family number + the remark description:',
+    '    * single-member families (e.g. 6 -> 6A) are unambiguous;',
+    '    * multi-member families (e.g. 21, 22, 23, 24) -> pick the sub-code whose code_master',
+    '      description best matches the remark;',
+    '    * if a row already shows a full sub-code (a letter suffix, e.g. "6A"), use it directly.',
+    '  Use the on-sheet code legend only as a hint to what a number means; ALWAYS choose the',
+    '  final code from the code_master list below, by description.',
+    '- If you CANNOT confidently choose a specific sub-code, set code to null (keep raw_code).',
+    '  NEVER guess or store a wrong code.',
     '',
     'INVENTORY (the bulk / mud & materials table, often headed "BULK" -> inventory[]):',
     '- Output ONE row for EVERY row of the inventory table — e.g. P/Water, D/Water,',
@@ -248,7 +266,7 @@ function buildPrompt(cellLines, codes) {
     '  "D/Water(MT)" -> item "D/Water", unit "MT". If a row has no unit, set unit null but',
     '  still output the item.',
     '',
-    'Valid activity codes (code = description [category]):',
+    'Valid activity codes (code = description [condition]):',
     codeList,
     '',
     '--- BEGIN CELL DUMP ---',
@@ -327,6 +345,26 @@ export function coerceHeader(h) {
   }
 }
 
+// Clock time -> canonical HH:MM. Accepts "10.30", "10:30", "6.00", "0.30", "24.00", "3".
+export function coerceTime(v) {
+  if (v == null) return null
+  const s = String(v).trim()
+  if (s === '' || BLANK.test(s)) return null
+  const m = s.match(/^(\d{1,2})\s*[.:h]\s*(\d{1,2})/) || s.match(/^(\d{1,2})$/)
+  if (!m) return null
+  const hh = String(Math.min(24, parseInt(m[1], 10))).padStart(2, '0')
+  const mm = String(parseInt(m[2] ?? '0', 10) || 0).padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
+// ISO date + N days -> ISO (used to LOG the next-morning block's date; not stored).
+function addDaysISO(iso, n) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso || ''))) return null
+  const d = new Date(iso + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
 // --- Core extraction (reusable) ---------------------------------------------
 export async function extractDDR(inputFile) {
   loadEnvLocal()
@@ -357,6 +395,33 @@ export async function extractDDR(inputFile) {
   result.header = coerceHeader(result.header)
   // Normalize report_date too (keep the raw value if unparseable so validate flags it).
   result.report_date = coerceDate(result.report_date) ?? result.report_date
+
+  // --- Stage B: normalize activity times + own-day / next-morning split -------
+  const rawActs = Array.isArray(result.activities) ? result.activities : []
+  for (const a of rawActs) {
+    a.time_from = coerceTime(a.time_from)
+    a.time_to = coerceTime(a.time_to)
+  }
+  // Anything not explicitly tagged next_morning is treated as own_day (never drop data).
+  const nextMorning = rawActs.filter((a) => a.block === 'next_morning')
+  const ownDay = rawActs.filter((a) => a.block !== 'next_morning')
+  const nextMorningDate = addDaysISO(result.report_date, 1)
+  // Own-day rows carry activity_date = report_date; drop the transient block tag.
+  for (const a of ownDay) { a.activity_date = result.report_date; delete a.block }
+  for (const a of nextMorning) delete a.block
+
+  const sumHrs = (list) => list.reduce((s, a) => s + (typeof a.hrs === 'number' ? a.hrs : 0), 0)
+  result._verify = {
+    ownDayHrs: sumHrs(ownDay),
+    nextMorningHrs: sumHrs(nextMorning),
+    totalHrs: sumHrs(rawActs),
+    ownDayCount: ownDay.length,
+    nextMorningCount: nextMorning.length,
+    nextMorningDate,                 // computed for cross-checking; NOT stored
+    nextMorning,                     // kept for the dry-run log only; NOT saved
+  }
+  // STORE ONLY the own-day block — the next report persists the next morning as its own day.
+  result.activities = ownDay
 
   return { result, codes, cellCount: cellLines.length }
 }
@@ -402,30 +467,43 @@ export function validate(result, codes) {
     detail: unknown.length === 0 ? `${activities.length} activities, all codes valid` : unknown.join('; '),
   })
 
-  // --- WARNINGS (non-fatal; do NOT affect extraction_status in Stage A) --------
+  // Stage B: OWN-DAY hours must total ~24h. FATAL (-> needs_review) but the report
+  // is still SAVED (saveReport always writes; status just reflects validation).
+  const v = result._verify || {}
+  const ownDayHrs = typeof v.ownDayHrs === 'number'
+    ? v.ownDayHrs
+    : activities.reduce((s, a) => s + (typeof a.hrs === 'number' ? a.hrs : 0), 0)
+  // Exclusive tolerance: exactly 0.5h off (e.g. 24.5) FLAGS needs_review, as intended.
+  const ownDayOk = Math.abs(ownDayHrs - HRS_TARGET) < HRS_TOLERANCE
+  checks.push({
+    name: `Own-day activity hours ~= ${HRS_TARGET} (within <${HRS_TOLERANCE}h)`,
+    pass: ownDayOk,
+    detail: `own-day total = ${ownDayHrs.toFixed(2)} h across ${activities.length} stored activities`,
+  })
+
+  // --- WARNINGS / INFO (non-fatal) ---------------------------------------------
   const warnings = []
+  // Overlap reconciliation (next-morning is parsed for check, discarded from storage).
+  warnings.push(
+    `overlap: own-day ${Number(ownDayHrs).toFixed(2)}h (stored) + next-morning ` +
+    `${Number(v.nextMorningHrs || 0).toFixed(2)}h (${v.nextMorningCount || 0} rows, date ` +
+    `${v.nextMorningDate || 'n/a'}, DISCARDED) = total ${Number(v.totalHrs || 0).toFixed(2)}h`
+  )
+  const nullCodes = activities
+    .map((a, i) => (a.code == null ? `row ${i + 1} raw_code=${JSON.stringify(a.raw_code)} (${String(a.remarks).slice(0, 40)})` : null))
+    .filter(Boolean)
+  if (nullCodes.length) warnings.push(`UNMAPPED codes (code=null -> needs_review): ${nullCodes.join(' | ')}`)
 
-  // Hours check is WARN-ONLY in Stage A: real DDRs carry ~30h (own day + next
-  // morning). The proper own-day (~24h) check arrives in Stage B once activities
-  // carry activity_date.
-  const totalHrs = activities.reduce((sum, a) => sum + (typeof a.hrs === 'number' ? a.hrs : 0), 0)
-  if (Math.abs(totalHrs - HRS_TARGET) > HRS_TOLERANCE) {
-    warnings.push(`Total activity hours = ${totalHrs.toFixed(2)} h (not ~${HRS_TARGET}); expected for a ~30h DDR — own-day check comes in Stage B.`)
-  }
-
-  // Header sanity — informational only; an ABSENT (null) field is legitimate, never a fail.
+  // Header sanity — informational; an ABSENT (null) field is legitimate, never a fail.
   const h = result.header || {}
   const isISO = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)
   for (const f of ['spud_date', 'move_in_date']) {
     if (h[f] != null && !isISO(h[f])) warnings.push(`header.${f} not ISO after coercion: ${JSON.stringify(h[f])}`)
   }
-  for (const f of ['pob_total', 'lti_days']) {
-    if (h[f] != null && (!Number.isInteger(h[f]) || h[f] < 0)) warnings.push(`header.${f} not a non-negative integer: ${JSON.stringify(h[f])}`)
-  }
   const missing = Object.keys(h).filter((k) => h[k] == null)
   if (missing.length) warnings.push(`header fields absent (null): ${missing.join(', ')}`)
 
-  return { checks, warnings, totalHrs }
+  return { checks, warnings, totalHrs: ownDayHrs }
 }
 
 // --- CLI ---------------------------------------------------------------------
@@ -446,8 +524,25 @@ async function main() {
   console.log(`report_date : ${JSON.stringify(result.report_date)}`)
   console.log(JSON.stringify(result.header, null, 2))
 
-  console.log('\n===================== EXTRACTED JSON (full) ==============')
-  console.log(JSON.stringify(result, null, 2))
+  const v = result._verify || {}
+  console.log('\n===================== OWN-DAY ACTIVITIES (STORED) ========')
+  console.log(`activity_date = ${result.report_date}`)
+  console.log('  #  | from  - to    | hrs  | raw -> code | remarks')
+  result.activities.forEach((a, i) => {
+    console.log(
+      `  ${String(i + 1).padStart(2)} | ${a.time_from ?? '??:??'} - ${a.time_to ?? '??:??'} | ` +
+      `${String(a.hrs).padStart(4)} | ${String(a.raw_code).padStart(3)} -> ${a.code ?? 'NULL'} | ${String(a.remarks).slice(0, 52)}`
+    )
+  })
+
+  console.log('\n----------------- NEXT-MORNING (PARSED, DISCARDED) -------')
+  console.log(`date ${v.nextMorningDate || 'n/a'} — ${v.nextMorningCount || 0} rows, ${Number(v.nextMorningHrs || 0).toFixed(2)}h (NOT stored)`)
+  ;(v.nextMorning || []).forEach((a) => {
+    console.log(`     ${a.time_from ?? '??:??'} - ${a.time_to ?? '??:??'} | ${String(a.hrs).padStart(4)} | ${String(a.raw_code).padStart(3)} -> ${a.code ?? 'NULL'} | ${String(a.remarks).slice(0, 44)}`)
+  })
+
+  console.log('\n----------------- OVERLAP RECONCILIATION -----------------')
+  console.log(`own-day ${Number(v.ownDayHrs || 0).toFixed(2)}h + next-morning ${Number(v.nextMorningHrs || 0).toFixed(2)}h = total ${Number(v.totalHrs || 0).toFixed(2)}h`)
 
   const { checks, warnings, totalHrs } = validate(result, codes)
 
