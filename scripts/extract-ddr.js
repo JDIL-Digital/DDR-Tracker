@@ -18,6 +18,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import XLSX from 'xlsx'
+import { getServerClient } from './supabase-server.js'
 
 const MODEL = 'claude-haiku-4-5'
 const HRS_TARGET = 24
@@ -85,37 +86,59 @@ export function excelToLines(filePath) {
   return lines
 }
 
-// --- Parse the valid activity codes from the seed migration ------------------
-export function loadCodeMaster() {
-  const sql = readFileSync('supabase/migrations/0002_seed_codes.sql', 'utf8')
-  const re = /\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(true|false)\s*\)/g
-  const codes = []
-  let m
-  while ((m = re.exec(sql)) !== null) {
-    codes.push({ code: m[1], description: m[2], category: m[3], is_npt: m[4] === 'true' })
-  }
-  return codes
+// --- Load the AUTHORITATIVE activity codes from the LIVE code_master table ----
+// (migration 0022: 75 IADC codes with condition RODR/NODR/EBDR/MDR + is_npt).
+// NOT from 0002_seed_codes.sql (stale draft) — the live table is the source of
+// truth the FK enforces and that drives billing/KPI classification.
+export async function loadCodeMaster() {
+  const sb = getServerClient()
+  const { data, error } = await sb
+    .from('code_master')
+    .select('code, description, condition, is_npt')
+    .order('code')
+  if (error) throw new Error(`load code_master failed: ${error.message}`)
+  return data || []
 }
 
 // --- Structured-output JSON schema (matches the DB) --------------------------
 const num = { type: ['number', 'null'] }
 const str = { type: ['string', 'null'] }
 
-// Note: the API caps schemas at 16 union-typed (nullable) params. The
-// always-present fields (rig_name, report_date, activity hrs/code/remarks,
-// inventory item) are non-nullable; the rest are nullable for genuinely-absent
-// values. Current union count = 15.
+// The API caps schemas at 16 union-typed (nullable) params. The activity +
+// inventory nullables already sit near that cap, so the ~23 DDR HEADER fields are
+// modelled as a nested `header` object of NON-nullable strings ("" = absent) —
+// which add ZERO unions — and coerced to typed values (numbers/ISO dates/null) in
+// extractDDR via coerceHeader(). rig_name/report_date stay top-level (the RPC
+// needs them to resolve the rig + upsert key).
+const hs = { type: 'string' } // header field: non-nullable string, "" means absent
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     rig_name: { type: 'string' },
-    well_no: str,
-    report_no: str,
     report_date: { type: 'string', description: 'ISO date, yyyy-mm-dd' },
-    depth_md_m: num,
-    day_meterage_m: num,
-    fuel_consumed_kl: num,
+    header: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        well_no: hs, report_no: hs,
+        days_on_location: hs, days_on_well: hs,
+        depth_md_m: hs, depth_tvd_m: hs, day_meterage_m: hs,
+        present_operation: hs, next_operation: hs,
+        spud_date: hs, move_in_date: hs, oim: hs,
+        pob_total: hs, lti_days: hs,
+        fuel_open_kl: hs, fuel_recv_kl: hs, fuel_consumed_kl: hs, fuel_close_kl: hs, diesel_rob_kl: hs,
+        downtime_daily_hrs: hs, downtime_cum_hrs: hs,
+        daily_cost: hs, cumulative_cost: hs,
+      },
+      required: [
+        'well_no', 'report_no', 'days_on_location', 'days_on_well',
+        'depth_md_m', 'depth_tvd_m', 'day_meterage_m', 'present_operation', 'next_operation',
+        'spud_date', 'move_in_date', 'oim', 'pob_total', 'lti_days',
+        'fuel_open_kl', 'fuel_recv_kl', 'fuel_consumed_kl', 'fuel_close_kl', 'diesel_rob_kl',
+        'downtime_daily_hrs', 'downtime_cum_hrs', 'daily_cost', 'cumulative_cost',
+      ],
+    },
     activities: {
       type: 'array',
       items: {
@@ -153,12 +176,8 @@ const SCHEMA = {
   },
   required: [
     'rig_name',
-    'well_no',
-    'report_no',
     'report_date',
-    'depth_md_m',
-    'day_meterage_m',
-    'fuel_consumed_kl',
+    'header',
     'activities',
     'inventory',
   ],
@@ -166,7 +185,7 @@ const SCHEMA = {
 
 function buildPrompt(cellLines, codes) {
   const codeList = codes
-    .map((c) => `  ${c.code} = ${c.description} [${c.category}${c.is_npt ? ', NPT' : ''}]`)
+    .map((c) => `  ${c.code} = ${c.description} [${c.condition || '—'}${c.is_npt ? ', NPT' : ''}]`)
     .join('\n')
 
   return [
@@ -178,7 +197,32 @@ function buildPrompt(cellLines, codes) {
     '',
     'GENERAL RULES:',
     '- report_date MUST be ISO format yyyy-mm-dd.',
-    '- Numeric fields must be numbers (not strings); use null when a value is genuinely absent.',
+    '- rig_name: copy the rig name as written on the sheet (do not correct spelling/case).',
+    '',
+    'HEADER FIELDS (-> header{}): locate each by its LABEL and read the adjacent value.',
+    'Match on the label text, NOT cell position (layouts differ between rigs). Return EVERY',
+    'header field as a STRING. If a field is genuinely absent, return "" (empty string) —',
+    'NEVER guess or invent. Keep dates roughly as written (they are normalized downstream);',
+    'strip obvious unit suffixes from numbers where easy. Label hints:',
+    '  well_no <- "Well No"',
+    '  report_no <- the value in the cell directly next to the "Report No." label ONLY.',
+    '     Do NOT use the "GTO No", "WO ...", or well/contract number. If the "Report No."',
+    '     cell has no value, return "" (do not substitute a nearby number).',
+    '  days_on_location <- "Days on Loc"     days_on_well <- "Days on Well"',
+    '  depth_md_m <- "Depth MD (m)"',
+    '  depth_tvd_m <- a top-level "Depth TVD (m)" field ONLY. Ignore "TVD" column headers',
+    '     inside the casing / BHA tables. If there is no top-level TVD field, return "".',
+    '  day_meterage_m <- today\'s drilled meterage ("Days met / Monthly meterage"); "" if blank',
+    '  present_operation <- "Present Operation"   next_operation <- planned/next ops (if present)',
+    '  spud_date <- "OPERATION START/SPUD DATE"   move_in_date <- "Move in date"',
+    '  oim <- "OIM / Tool Pushers"           pob_total <- Personnel Onboard "TOTAL"',
+    '  lti_days <- "No LTI Days"',
+    '  fuel_open_kl / fuel_recv_kl / fuel_consumed_kl / fuel_close_kl / diesel_rob_kl',
+    '     <- the "Fuel Oil (KL)" bulk row (opening / received / consumed / closing;',
+    '        diesel_rob_kl = the remaining-on-board / closing figure for fuel oil)',
+    '  downtime_daily_hrs <- "Monthly Rig Downtime" -> "Daily"',
+    '  downtime_cum_hrs   <- "Monthly Rig Downtime" -> cumulative',
+    '  daily_cost <- "Daily Cost"            cumulative_cost <- "Cum Cost"',
     '',
     'ACTIVITIES (the time-log / operations table -> activities[]):',
     '- One row per time interval: time_from, time_to, hours (hrs), depth in/out if present,',
@@ -213,6 +257,76 @@ function buildPrompt(cellLines, codes) {
   ].join('\n')
 }
 
+// --- Header coercion: model returns strings ("" = absent); convert to typed ---
+// Never invents: unparseable / blank / "nil"/"na" => null.
+const BLANK = /^(nil|na|n\/?a|-|--|none)$/i
+function coerceText(v) {
+  if (v == null) return null
+  const s = String(v).trim()
+  return s === '' || BLANK.test(s) ? null : s
+}
+function coerceNum(v) {
+  if (v == null) return null
+  const s = String(v).trim()
+  if (s === '' || BLANK.test(s)) return null
+  const m = s.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/) // first number; strips units (KL, hrs, m, Kips)
+  return m ? Number(m[0]) : null
+}
+function coerceInt(v) {
+  const n = coerceNum(v)
+  return n == null ? null : Math.round(n)
+}
+// dd.mm.yyyy | dd/mm/yyyy | dd-mm-yyyy | ISO, tolerant of "@ 1730 HRS" suffixes and
+// typo'd years ("02.05.02026" -> 2026). Unparseable => null (never guess).
+export function coerceDate(v) {
+  if (v == null) return null
+  let s = String(v).trim()
+  if (s === '' || BLANK.test(s)) return null
+  s = s.replace(/@.*$/, '').replace(/\b\d{3,4}\s*hrs?\b.*$/i, '').trim() // drop time suffixes
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/) // ISO
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+  m = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,6})/) // dd mm yyyy (any separator)
+  if (m) {
+    let [, dd, mm, yy] = m
+    if (yy.length > 4) yy = yy.slice(-4)        // "02026" typo -> "2026"
+    else if (yy.length === 2) yy = '20' + yy
+    if (+dd >= 1 && +dd <= 31 && +mm >= 1 && +mm <= 12) {
+      return `${yy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
+    }
+  }
+  return null
+}
+
+// Coerce the raw header object (all strings) into typed values.
+export function coerceHeader(h) {
+  h = h || {}
+  return {
+    well_no: coerceText(h.well_no),
+    report_no: coerceText(h.report_no),
+    days_on_location: coerceNum(h.days_on_location),
+    days_on_well: coerceNum(h.days_on_well),
+    depth_md_m: coerceNum(h.depth_md_m),
+    depth_tvd_m: coerceNum(h.depth_tvd_m),
+    day_meterage_m: coerceNum(h.day_meterage_m),
+    present_operation: coerceText(h.present_operation),
+    next_operation: coerceText(h.next_operation),
+    spud_date: coerceDate(h.spud_date),
+    move_in_date: coerceDate(h.move_in_date),
+    oim: coerceText(h.oim),
+    pob_total: coerceInt(h.pob_total),
+    lti_days: coerceInt(h.lti_days),
+    fuel_open_kl: coerceNum(h.fuel_open_kl),
+    fuel_recv_kl: coerceNum(h.fuel_recv_kl),
+    fuel_consumed_kl: coerceNum(h.fuel_consumed_kl),
+    fuel_close_kl: coerceNum(h.fuel_close_kl),
+    diesel_rob_kl: coerceNum(h.diesel_rob_kl),
+    downtime_daily_hrs: coerceNum(h.downtime_daily_hrs),
+    downtime_cum_hrs: coerceNum(h.downtime_cum_hrs),
+    daily_cost: coerceNum(h.daily_cost),
+    cumulative_cost: coerceNum(h.cumulative_cost),
+  }
+}
+
 // --- Core extraction (reusable) ---------------------------------------------
 export async function extractDDR(inputFile) {
   loadEnvLocal()
@@ -220,7 +334,7 @@ export async function extractDDR(inputFile) {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not found in .env.local')
 
   const cellLines = excelToLines(inputFile)
-  const codes = loadCodeMaster()
+  const codes = await loadCodeMaster()
   const client = new Anthropic({ apiKey })
 
   const response = await client.messages.create({
@@ -237,6 +351,12 @@ export async function extractDDR(inputFile) {
   const textBlock = response.content.find((b) => b.type === 'text')
   if (!textBlock) throw new Error('No text block in model response.')
   const result = JSON.parse(textBlock.text)
+
+  // Coerce the header strings -> typed values (dates ISO, numbers plain, ""->null)
+  // so the dry-run print and the DB payload both see clean, honest data.
+  result.header = coerceHeader(result.header)
+  // Normalize report_date too (keep the raw value if unparseable so validate flags it).
+  result.report_date = coerceDate(result.report_date) ?? result.report_date
 
   return { result, codes, cellCount: cellLines.length }
 }
@@ -271,16 +391,8 @@ export function validate(result, codes) {
     detail: isoOk ? '' : `got ${JSON.stringify(result.report_date)}`,
   })
 
-  const activities = Array.isArray(result.activities) ? result.activities : []
-  const totalHrs = activities.reduce((sum, a) => sum + (typeof a.hrs === 'number' ? a.hrs : 0), 0)
-  const hrsOk = Math.abs(totalHrs - HRS_TARGET) <= HRS_TOLERANCE
-  checks.push({
-    name: `Total activity hours ~= ${HRS_TARGET} (+/-${HRS_TOLERANCE})`,
-    pass: hrsOk,
-    detail: `total = ${totalHrs.toFixed(2)} h`,
-  })
-
   const unknown = []
+  const activities = Array.isArray(result.activities) ? result.activities : []
   activities.forEach((a, i) => {
     if (!validCodes.has(a.code)) unknown.push(`row ${i + 1}: ${JSON.stringify(a.code)}`)
   })
@@ -290,7 +402,30 @@ export function validate(result, codes) {
     detail: unknown.length === 0 ? `${activities.length} activities, all codes valid` : unknown.join('; '),
   })
 
-  return { checks, totalHrs }
+  // --- WARNINGS (non-fatal; do NOT affect extraction_status in Stage A) --------
+  const warnings = []
+
+  // Hours check is WARN-ONLY in Stage A: real DDRs carry ~30h (own day + next
+  // morning). The proper own-day (~24h) check arrives in Stage B once activities
+  // carry activity_date.
+  const totalHrs = activities.reduce((sum, a) => sum + (typeof a.hrs === 'number' ? a.hrs : 0), 0)
+  if (Math.abs(totalHrs - HRS_TARGET) > HRS_TOLERANCE) {
+    warnings.push(`Total activity hours = ${totalHrs.toFixed(2)} h (not ~${HRS_TARGET}); expected for a ~30h DDR — own-day check comes in Stage B.`)
+  }
+
+  // Header sanity — informational only; an ABSENT (null) field is legitimate, never a fail.
+  const h = result.header || {}
+  const isISO = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)
+  for (const f of ['spud_date', 'move_in_date']) {
+    if (h[f] != null && !isISO(h[f])) warnings.push(`header.${f} not ISO after coercion: ${JSON.stringify(h[f])}`)
+  }
+  for (const f of ['pob_total', 'lti_days']) {
+    if (h[f] != null && (!Number.isInteger(h[f]) || h[f] < 0)) warnings.push(`header.${f} not a non-negative integer: ${JSON.stringify(h[f])}`)
+  }
+  const missing = Object.keys(h).filter((k) => h[k] == null)
+  if (missing.length) warnings.push(`header fields absent (null): ${missing.join(', ')}`)
+
+  return { checks, warnings, totalHrs }
 }
 
 // --- CLI ---------------------------------------------------------------------
@@ -306,10 +441,15 @@ async function main() {
   console.log(`Cells read : ${cellCount} non-empty cells`)
   console.log(`Code master: ${codes.length} valid activity codes loaded`)
 
-  console.log('\n===================== EXTRACTED JSON =====================')
+  console.log('\n===================== EXTRACTED HEADER ====================')
+  console.log(`rig_name    : ${JSON.stringify(result.rig_name)}`)
+  console.log(`report_date : ${JSON.stringify(result.report_date)}`)
+  console.log(JSON.stringify(result.header, null, 2))
+
+  console.log('\n===================== EXTRACTED JSON (full) ==============')
   console.log(JSON.stringify(result, null, 2))
 
-  const { checks, totalHrs } = validate(result, codes)
+  const { checks, warnings, totalHrs } = validate(result, codes)
 
   console.log('\n===================== VALIDATION REPORT ==================')
   let allPass = true
@@ -318,7 +458,11 @@ async function main() {
     if (!c.pass) allPass = false
     console.log(`[${status}] ${c.name}${c.detail ? `  — ${c.detail}` : ''}`)
   }
-  console.log(`\nOverall: ${allPass ? 'PASS' : 'FAIL'}`)
+  console.log(`\nOverall (fatal checks): ${allPass ? 'PASS' : 'FAIL'}`)
+  if (warnings.length) {
+    console.log('\n--------------------- WARNINGS (non-fatal) ---------------')
+    for (const w of warnings) console.log(`[WARN] ${w}`)
+  }
 
   console.log('\n===================== TOTALS =============================')
   console.log(`Total activity hours: ${totalHrs.toFixed(2)} h (target ${HRS_TARGET} +/-${HRS_TOLERANCE})`)
