@@ -24,7 +24,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { getGmailClient } from './gmail-auth.js'
+import { getGmailClient, getMessageFull } from './gmail-auth.js'
 import { getServerClient } from './supabase-server.js'
 import { classifyMessage, selectDdrXlsx, normRig } from './ddr-match.js'
 import { extractDDR, validate } from './extract-ddr.js'
@@ -85,34 +85,47 @@ async function main() {
 
   const candidateIds = await listAll(gmail, query)
 
-  // Classify all candidates first.
+  // Classify all candidates first. Each fetch is retried (getMessageFull); a
+  // message that still can't be fetched is COUNTED as a failure, never silently
+  // dropped.
   const matched = []
   const flagged = []
   let excludedCount = 0
+  let fetchFailed = 0
+  const fetchFailures = []
   for (const id of candidateIds) {
-    const msg = await gmail.users.messages.get({ userId: 'me', id, format: 'full' })
+    let msg
+    try { msg = await getMessageFull(gmail, id) }
+    catch (e) { fetchFailed++; fetchFailures.push(`${id}: ${e.message}`); continue }
     const c = classifyMessage(msg.data)
     if (c.status === 'matched') matched.push(c)
     else if (c.status === 'flagged') flagged.push(c)
     else excludedCount++
   }
+  // SELF-CHECK: every scanned message must be accounted for. A mismatch (or any
+  // fetch failure) means the scan under-fetched — fail loud so a degraded
+  // scheduled run is visible, not a silent "0 matched".
+  const accounted = matched.length + flagged.length + excludedCount + fetchFailed
+  const scanHealthy = accounted === candidateIds.length && fetchFailed === 0
 
   // Optional --match filter (subject/rig/date substring) for controlled single-report runs.
-  const matchedAll = matched.length
-  const matchedFiltered = matchStr
+  // NOTE: build a SEPARATE list — never mutate `matched` (a prior version aliased
+  // `matched` and emptied it when no --match was given, silently yielding 0 matched).
+  // RDDR-WINS: order so REVISED (is_revised) reports are processed LAST, so within a
+  // rig+date the revision's save_ddr_report upsert lands OVER the original DDR.
+  const toIngest = (matchStr
     ? matched.filter((c) => `${c.subject} ${c.rig} ${c.report_date}`.toLowerCase().includes(matchStr))
-    : matched
-  matched.length = 0
-  matched.push(...matchedFiltered)
+    : matched.slice())
+    .sort((a, b) => Number(!!a.is_revised) - Number(!!b.is_revised))
 
-  const processed = await loadProcessed(supabase, matched.map((m) => m.id))
-  console.log(`Found   : ${matched.length} matched DDR(s)${matchStr ? ` (filtered from ${matchedAll} by --match "${matchStr}")` : ''}, ${flagged.length} flagged, ${excludedCount} excluded, ${candidateIds.length} scanned\n`)
+  const processed = await loadProcessed(supabase, toIngest.map((m) => m.id))
+  console.log(`Found   : ${toIngest.length} matched DDR(s)${matchStr ? ` (filtered from ${matched.length} by --match "${matchStr}")` : ''}, ${flagged.length} flagged, ${excludedCount} excluded, ${candidateIds.length} scanned\n`)
 
   const results = []
   const skippedProcessed = []
   const needsReview = [...flagged.map((f) => ({ label: truncate(f.subject, 55), reason: f.reason }))]
 
-  for (const c of matched) {
+  for (const c of toIngest) {
     const label = `${c.rig} ${c.report_date}${c.is_revised ? ' (RDDR)' : ''}`
 
     // Skip already-processed BEFORE any download / API call (zero cost).
@@ -188,7 +201,20 @@ async function main() {
   }
 
   console.log(`\nExcluded non-DDR xlsx mail: ${excludedCount}. Candidates scanned: ${candidateIds.length}.`)
-  console.log(doSave ? 'SAVE run complete.' : 'DRY RUN — nothing downloaded/written. Add --save (and --extract) to act.')
+
+  // Scan-health self-check (fail loud on a degraded scan).
+  console.log(`\n===== SCAN HEALTH =====`)
+  console.log(`  accounted ${accounted}/${candidateIds.length} (matched ${matched.length} + flagged ${flagged.length} + excluded ${excludedCount} + fetch-failed ${fetchFailed})`)
+  if (!scanHealthy) {
+    console.error(`  ❌ DEGRADED SCAN: ${fetchFailed} message(s) could not be fetched after retries; results may be INCOMPLETE.`)
+    for (const f of fetchFailures.slice(0, 20)) console.error(`     - ${f}`)
+    console.error('  Exiting non-zero so this run is flagged (not a silent under-match).')
+    process.exitCode = 1
+  } else {
+    console.log('  ✅ healthy — every scanned message accounted for, no fetch failures.')
+  }
+
+  console.log(doSave ? '\nSAVE run complete.' : '\nDRY RUN — nothing downloaded/written. Add --save (and --extract) to act.')
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
