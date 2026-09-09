@@ -83,3 +83,25 @@ export function getGmailAuth() {
 export function getGmailClient() {
   return google.gmail({ version: 'v1', auth: getGmailAuth() })
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// Fetch ONE message (format:full) with retry + exponential backoff. Treats BOTH
+// a thrown error AND a degraded/empty response (no payload) as retryable — the
+// simulated inbox intermittently returns payload-less responses under bulk
+// sequential scans, which silently produced "0 matched". Throws after all tries
+// so the caller can COUNT the failure (never silently drop a message).
+export async function getMessageFull(gmail, id, tries = 3) {
+  let lastErr
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      const msg = await gmail.users.messages.get({ userId: 'me', id, format: 'full' })
+      if (!msg?.data?.payload) throw new Error('empty/degraded response (no payload)')
+      return msg
+    } catch (e) {
+      lastErr = e
+      if (attempt < tries) await sleep(250 * 2 ** attempt) // 500ms, 1s
+    }
+  }
+  throw new Error(`messages.get(${id}) failed after ${tries} tries: ${lastErr?.message || lastErr}`)
+}

@@ -20,7 +20,7 @@
 // Server-side: getGmailClient() (refresh token) + Supabase SECRET key. Never the browser.
 
 import { pathToFileURL } from 'node:url'
-import { getGmailClient } from './gmail-auth.js'
+import { getGmailClient, getMessageFull } from './gmail-auth.js'
 import { getServerClient } from './supabase-server.js'
 import { classifyMessage, normRig } from './dmr-match.js'
 import { extractDMR, statusFor, saveExtraction } from './extract-dmr.js'
@@ -89,11 +89,16 @@ async function main() {
 
   const candidateIds = await listAll(gmail, query)
 
-  // Classify all candidates first.
+  // Classify all candidates first. Each fetch is retried (getMessageFull); a
+  // message that still can't be fetched is COUNTED, never silently dropped.
   const matched = []
   let excludedCount = 0
+  let fetchFailed = 0
+  const fetchFailures = []
   for (const id of candidateIds) {
-    const msg = await gmail.users.messages.get({ userId: 'me', id, format: 'full' })
+    let msg
+    try { msg = await getMessageFull(gmail, id) }
+    catch (e) { fetchFailed++; fetchFailures.push(`${id}: ${e.message}`); continue }
     const c = classifyMessage(msg.data)
     if (c.status === 'matched') matched.push(c)
     else excludedCount++
@@ -215,7 +220,22 @@ async function main() {
   }
 
   console.log(`\nExcluded non-DMR near-misses: ${excludedCount}. Candidates scanned: ${candidateIds.length}.`)
-  console.log(doSave ? 'SAVE run complete.' : 'DRY RUN — nothing downloaded/written. Add --save (and --extract) to act.')
+
+  // Scan-health self-check (fail loud on a degraded scan).
+  const accounted = matched.length + excludedCount + fetchFailed
+  const scanHealthy = accounted === candidateIds.length && fetchFailed === 0
+  console.log(`\n===== SCAN HEALTH =====`)
+  console.log(`  accounted ${accounted}/${candidateIds.length} (matched ${matched.length} + excluded ${excludedCount} + fetch-failed ${fetchFailed})`)
+  if (!scanHealthy) {
+    console.error(`  ❌ DEGRADED SCAN: ${fetchFailed} message(s) could not be fetched after retries; results may be INCOMPLETE.`)
+    for (const f of fetchFailures.slice(0, 20)) console.error(`     - ${f}`)
+    console.error('  Exiting non-zero so this run is flagged (not a silent under-match).')
+    process.exitCode = 1
+  } else {
+    console.log('  ✅ healthy — every scanned message accounted for, no fetch failures.')
+  }
+
+  console.log(doSave ? '\nSAVE run complete.' : '\nDRY RUN — nothing downloaded/written. Add --save (and --extract) to act.')
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
