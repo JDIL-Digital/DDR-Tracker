@@ -273,6 +273,131 @@ body {
   border-bottom-color: var(--green);
 }
 
+/* Fleet dashboard — Section B per-rig cards */
+.rig-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+.rig-cardb .dept-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rig-cardb-empty {
+  opacity: 0.7;
+}
+.rig-cardb-review {
+  border-color: var(--amber);
+  box-shadow: inset 0 0 0 1px var(--amber);
+}
+.review-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.rig-metrics {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rig-metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 6px;
+}
+.rig-metric:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.rig-metric .rm-label {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.rig-metric .rm-val {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: right;
+}
+
+/* Fleet dashboard — Section C grouped downtime-by-rig bar chart */
+.dt-legend { display: flex; gap: 14px; align-items: center; }
+.dt-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.dt-swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.dt-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  margin-top: 14px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.dt-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 96px;
+}
+.dt-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 170px;
+  width: 100%;
+  justify-content: center;
+}
+.dt-barwrap {
+  width: 22px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+}
+.dt-barval { font-size: 9.5px; color: var(--muted); margin-bottom: 2px; white-space: nowrap; }
+.dt-bar { width: 100%; border-radius: 4px 4px 0 0; transition: height 0.2s; }
+.dt-label { font-size: 12px; font-weight: 600; color: var(--text); margin-top: 2px; }
+.dt-well { font-size: 10px; color: var(--dim); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Fleet dashboard — Section D NPT by cause */
+.npt-card .dept-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.npt-total { font-size: 12px; font-weight: 700; color: var(--amber); white-space: nowrap; }
+.npt-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.npt-causes { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.npt-causes li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: 8px;
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 6px;
+}
+.npt-causes li:last-child { border-bottom: none; padding-bottom: 0; }
+.cond-badge {
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #fff;
+}
+.cond-NODR { background: var(--amber); }
+.cond-EBDR { background: var(--red); }
+.npt-cause-txt { font-size: 12px; color: var(--text); line-height: 1.3; }
+.npt-cause-hrs { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.npt-mdr { margin-top: 8px; font-size: 10.5px; color: var(--dim); }
+
 /* ---- Auth: session splash + login screen ---- */
 .auth-splash {
   min-height: 100vh;
