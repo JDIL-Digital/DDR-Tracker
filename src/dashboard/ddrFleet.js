@@ -138,6 +138,65 @@ export async function loadDowntimeByRig(date) {
   return { rigs: rows, hasData: rows.some((r) => r.hasData) }
 }
 
+// Section D — NPT (non-productive time) by cause, per rig, for the selected date.
+// NPT = NODR + EBDR condition hours (RODR = productive, excluded). MDR (rig-move /
+// tow, contract-specific) is EXCLUDED from NPT but reported separately as mdrHrs
+// so it's visible, not silently dropped. Causes = the rig's NPT activities grouped
+// by code + description. Only rigs with a DDR on the date; a reporting rig with
+// zero NPT gets an honest "no non-productive time" state (causes: []).
+export async function loadNptByCause(date) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!date) return { rigs: [], hasData: false }
+
+  const [rigsRes, codesRes, repRes] = await Promise.all([
+    supabase.from('rigs').select('id, name, sort_order'),
+    supabase.from('code_master').select('code, description, condition'),
+    supabase.from('reports').select('id, rig_id, oim').eq('report_date', date),
+  ])
+  for (const r of [rigsRes, codesRes, repRes]) if (r.error) throw new Error(r.error.message)
+
+  const codeInfo = new Map((codesRes.data || []).map((c) => [c.code, { description: c.description, condition: c.condition }]))
+  const reports = repRes.data || []
+  const reportIds = reports.map((r) => r.id)
+
+  const actsByReport = new Map()
+  if (reportIds.length) {
+    const acts = await fetchActivities(reportIds)
+    for (const a of acts) {
+      if (!actsByReport.has(a.report_id)) actsByReport.set(a.report_id, [])
+      actsByReport.get(a.report_id).push(a)
+    }
+  }
+
+  const byRig = new Map(reports.map((r) => [r.rig_id, r]))
+  const ordered = (rigsRes.data || [])
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999) || String(a.name).localeCompare(String(b.name)))
+
+  const rows = ordered
+    .filter((rig) => byRig.has(rig.id))
+    .map((rig) => {
+      const rep = byRig.get(rig.id)
+      const acts = actsByReport.get(rep.id) || []
+      const causeMap = new Map()
+      let mdrHrs = 0
+      for (const a of acts) {
+        const info = codeInfo.get(a.code)
+        const cond = info?.condition
+        if (cond === 'MDR') { mdrHrs += Number(a.hrs) || 0; continue }
+        if (cond !== 'NODR' && cond !== 'EBDR') continue // NPT only
+        const key = a.code ?? '(unmapped)'
+        const e = causeMap.get(key) || { code: a.code ?? null, description: info?.description ?? null, condition: cond, hrs: 0 }
+        e.hrs += Number(a.hrs) || 0
+        causeMap.set(key, e)
+      }
+      const causes = [...causeMap.values()].filter((c) => c.hrs > 0).sort((a, b) => b.hrs - a.hrs)
+      return { rig: rig.name, oim: rep.oim ?? null, date, causes, nptTotal: causes.reduce((s, c) => s + c.hrs, 0), mdrHrs }
+    })
+
+  return { rigs: rows, hasData: rows.length > 0 }
+}
+
 // Section B — one card per rig for the selected date. Returns the full fleet in
 // sort_order; a rig with no DDR that date has hasReport=false (honest empty card).
 // Fields per reporting rig: report_no, pob_total, well_no, lti_days (days since

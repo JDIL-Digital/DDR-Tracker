@@ -371,6 +371,33 @@ body {
 .dt-label { font-size: 12px; font-weight: 600; color: var(--text); margin-top: 2px; }
 .dt-well { font-size: 10px; color: var(--dim); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Fleet dashboard — Section D NPT by cause */
+.npt-card .dept-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.npt-total { font-size: 12px; font-weight: 700; color: var(--amber); white-space: nowrap; }
+.npt-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.npt-causes { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.npt-causes li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: 8px;
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 6px;
+}
+.npt-causes li:last-child { border-bottom: none; padding-bottom: 0; }
+.cond-badge {
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #fff;
+}
+.cond-NODR { background: var(--amber); }
+.cond-EBDR { background: var(--red); }
+.npt-cause-txt { font-size: 12px; color: var(--text); line-height: 1.3; }
+.npt-cause-hrs { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.npt-mdr { margin-top: 8px; font-size: 10.5px; color: var(--dim); }
+
 /* ---- Auth: session splash + login screen ---- */
 .auth-splash {
   min-height: 100vh;

@@ -4,7 +4,7 @@
 // NPT-by-cause (D) are built in later sections.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
-import { loadDdrDates, loadFleetTotals, loadRigCards, loadDowntimeByRig } from './ddrFleet'
+import { loadDdrDates, loadFleetTotals, loadRigCards, loadDowntimeByRig, loadNptByCause } from './ddrFleet'
 import { fmt1, prettyDate, DASH } from './format'
 import { LoadError } from './LoadState'
 
@@ -22,6 +22,7 @@ export default function FleetView() {
   const [totals, setTotals] = useState(null)  // fleet totals for the date
   const [cards, setCards] = useState(null)    // per-rig cards for the date
   const [downtime, setDowntime] = useState(null) // cumulative RODR/NODR/EBDR per rig (current well)
+  const [npt, setNpt] = useState(null)         // NPT-by-cause per rig for the date
   const [err, setErr] = useState(null)
   const [loadingTotals, setLoadingTotals] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -41,9 +42,9 @@ export default function FleetView() {
   useEffect(() => {
     if (!date) return
     let cancelled = false
-    setLoadingTotals(true); setErr(null); setCards(null); setDowntime(null)
-    Promise.all([loadFleetTotals(date), loadRigCards(date), loadDowntimeByRig(date)])
-      .then(([t, c, d]) => { if (!cancelled) { setTotals(t); setCards(c); setDowntime(d) } })
+    setLoadingTotals(true); setErr(null); setCards(null); setDowntime(null); setNpt(null)
+    Promise.all([loadFleetTotals(date), loadRigCards(date), loadDowntimeByRig(date), loadNptByCause(date)])
+      .then(([t, c, d, n]) => { if (!cancelled) { setTotals(t); setCards(c); setDowntime(d); setNpt(n) } })
       .catch((e) => { if (!cancelled) setErr(e.message) })
       .finally(() => { if (!cancelled) setLoadingTotals(false) })
     return () => { cancelled = true }
@@ -113,6 +114,50 @@ export default function FleetView() {
 
       {/* Section C — cumulative RODR/NODR/EBDR per rig (current well) */}
       {downtime && <DowntimeByRig data={downtime} date={date} />}
+
+      {/* Section D — NPT by cause per rig (selected date) */}
+      {npt && <NptByCauseD data={npt} date={date} />}
+    </div>
+  )
+}
+
+// NPT (non-productive time) by cause, per rig, for the selected date.
+// NPT = NODR + EBDR; RODR excluded (productive); MDR excluded (rig-move) but noted.
+function NptByCauseD({ data, date }) {
+  const rows = data.rigs || []
+  return (
+    <div className="panel">
+      <h3>NPT by cause — per rig</h3>
+      <div className="psub">Non-productive time (NODR + EBDR) grouped by cause · {prettyDate(date)}</div>
+      {!data.hasData ? (
+        <div className="npt-empty">No rig filed a DDR for this date.</div>
+      ) : (
+        <div className="rig-grid">
+          {rows.map((r) => (
+            <div className="dept-card npt-card" key={r.rig}>
+              <div className="dept-head">
+                <span className="dept-name">{r.rig}</span>
+                <span className="npt-total mono">{r.nptTotal > 0 ? `${fmt1(r.nptTotal)} h NPT` : '0 h'}</span>
+              </div>
+              <div className="npt-sub">OIM: <b>{r.oim || DASH}</b> · {prettyDate(r.date)}</div>
+              {r.causes.length === 0 ? (
+                <div className="npt-empty sm">No non-productive time.</div>
+              ) : (
+                <ul className="npt-causes">
+                  {r.causes.map((c) => (
+                    <li key={c.code ?? c.description}>
+                      <span className={`cond-badge cond-${c.condition}`}>{c.condition}</span>
+                      <span className="npt-cause-txt"><b>{c.code || '—'}</b> {c.description || ''}</span>
+                      <span className="npt-cause-hrs mono">{fmt1(c.hrs)} h</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {r.mdrHrs > 0 && <div className="npt-mdr">MDR (rig move, excluded from NPT): {fmt1(r.mdrHrs)} h</div>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
