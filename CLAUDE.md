@@ -155,7 +155,7 @@ format/schema/dashboard reference.)
   excelToLines() (lossless A1=value grid dump) is the method to extend. Pipeline mirrors DMR:
   ddr-match.js + ingest-ddr.js, new bucket drilling-reports, reuse processed_emails (kind='ddr').
 
-## DDR EXTRACTOR — COMPLETE & DB-VERIFIED (extractor done; ingest pipeline is next)
+## DDR EXTRACTOR — COMPLETE & DB-VERIFIED (extractor + pipeline done — see "DDR PIPELINE — LIVE" below)
 The DDR extractor (extend of extract-ddr.js) is built, tested against real reports, and proven by a
 real --save to the DB. Stages:
 - Stage A (header): DB-backed loadCodeMaster from live code_master (authoritative 75 + condition),
@@ -184,14 +184,38 @@ real --save to the DB. Stages:
 - Migrations on main: 0023 (schema+RPC). Commits on main: Stage A dd96075, Stage B 84bf0a0, rig-norm
   f29df1f.
 
-## DDR — REMAINING (next)
-1. Ingest pipeline (mirrors DMR): ddr-match.js (subject RIG_DDR_DD-MM-YYYY; RDDR_DATE = revision,
-   supersedes via RPC upsert on (rig_id, report_date)), ingest-ddr.js (Gmail scan → download xlsx →
-   Storage bucket "drilling-reports" → save_ddr_report, --extract chains extract-ddr.js), idempotent
-   via processed_emails kind='ddr'. Add to JDIL DMR Scheduler Replit project, triggers 7:30 + 8:30 AM.
-2. Fleet dashboard (spec A/B/C/D already in doc) reading the DDR data — INCLUDING a visible
-   needs_review / hours-discrepancy indicator on flagged rigs' cards (e.g. Star's 24.5h).
-3. OPEN: MDR-as-NPT decision (still pending team).
+## DDR PIPELINE — LIVE & DB-VERIFIED END-TO-END
+- Full pipeline proven: Gmail match → correct .xlsx selection → download → drilling-reports bucket →
+  extract → save_ddr_report → idempotent marker. Verified against real emails: Discovery-1 08-09,
+  Jindal Explorer 08-09, Jindal Star 08-09 all saved with headers + own-day activities, valid codes,
+  no duplicate rigs (Explorer matched existing canonical). 12 reports / 10 ddr markers in DB.
+- Commits on main: pipeline (ddr-match, ingest-ddr, bucket 0024), scan-hardening fix (aliasing
+  0-match bug + gmail fetch retry/backoff + fail-loud self-check that makes matched+flagged+
+  excluded+failed=scanned, ab5598b/PR#31), RDDR revised-wins ordering.
+- CRITICAL DEPLOY LESSONS (both bit us, both cost real debugging):
+  1. The scheduler runs the PUBLISHED snapshot, NOT main — every pipeline code change requires
+     git pull + REPUBLISH the JDIL DMR Scheduler project, or it runs stale code. Republish must
+     fully complete to take effect.
+  2. The DDR run command MUST include --extract. With --save alone, files store to the bucket but
+     NO report row/marker is created (save+marker are in the --extract branch). Correct combined
+     command: node scripts/ingest-dmr.js --save --extract ; node scripts/ingest-ddr.js --save --extract
+- VERIFY IN THE DB, NOT THE LOG: the ingest log printed "STORED" while nothing persisted (files
+  stored, --extract missing). Always confirm report rows/markers in the DB after a run.
+
+## DDR — REAL-WORLD DATA QUIRKS OBSERVED
+- RDDR supersede keys on the EXTRACTED SHEET date (trust the document), not the subject date. Today
+  a "JINDAL STAR_RDDR_08-09-2026" email carried an attachment/sheet dated 09-09, so it correctly
+  saved a separate Jindal Star 2026-09-09 report (needs_review, 3 acts) rather than revising 08-09.
+  This is correct "trust the source" behavior; the mislabeled subject is a rig-side data-quality
+  issue to raise with the rig. KEEP current behavior (trust sheet date).
+- Jindal Supreme DDRs currently have NO date in subject ("DDR-DPR Jindal Supreme") → skipped/flagged,
+  not ingested (per decision, no date guessing). Supreme to switch to RIG_DDR_DATE format.
+- lti_days = days SINCE last LTI (injury-free streak); label "Days Without LTI" on dashboard.
+
+## DDR — REMAINING
+- Fix the scheduler deployment so --extract actually runs in production (Republish must take effect).
+- Fleet dashboard (spec A/B/C/D) reading DDR data, with needs_review/hours-discrepancy indicator.
+- OPEN: MDR-as-NPT decision (pending team).
 
 ## DMR AUTO-INGEST PIPELINE — FULLY DEPLOYED & AUTOMATIC (done this session)
 The daily maintenance report (DMR) pipeline is LIVE and runs automatically. No manual step needed.
