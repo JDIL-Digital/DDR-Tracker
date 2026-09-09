@@ -58,3 +58,43 @@ export async function loadFleetTotals(date) {
 
   return { date, reportsReceived, fleetSize, dieselRob: dieselHas ? dieselRob : null, hours }
 }
+
+// Section B — one card per rig for the selected date. Returns the full fleet in
+// sort_order; a rig with no DDR that date has hasReport=false (honest empty card).
+// Fields per reporting rig: report_no, pob_total, well_no, lti_days (days since
+// last LTI — "Days Without LTI"), fuel_consumed_kl (daily diesel consumption),
+// downtime_daily_hrs / downtime_cum_hrs, and needs_review (from extraction_status).
+export async function loadRigCards(date) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!date) return []
+  const [rigsRes, repRes] = await Promise.all([
+    supabase.from('rigs').select('id, name, sort_order'),
+    supabase
+      .from('reports')
+      .select('rig_id, report_no, well_no, pob_total, lti_days, fuel_consumed_kl, downtime_daily_hrs, downtime_cum_hrs, extraction_status')
+      .eq('report_date', date),
+  ])
+  for (const r of [rigsRes, repRes]) if (r.error) throw new Error(r.error.message)
+
+  const reportByRig = new Map((repRes.data || []).map((r) => [r.rig_id, r]))
+  const rigs = (rigsRes.data || [])
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999) || String(a.name).localeCompare(String(b.name)))
+
+  return rigs.map((rig) => {
+    const r = reportByRig.get(rig.id)
+    if (!r) return { rig: rig.name, hasReport: false }
+    return {
+      rig: rig.name,
+      hasReport: true,
+      reportNo: r.report_no,
+      pob: r.pob_total,
+      well: r.well_no,
+      ltiDays: r.lti_days,
+      dailyDiesel: r.fuel_consumed_kl,
+      downtimeDaily: r.downtime_daily_hrs,
+      downtimeCum: r.downtime_cum_hrs,
+      needsReview: r.extraction_status === 'needs_review',
+    }
+  })
+}

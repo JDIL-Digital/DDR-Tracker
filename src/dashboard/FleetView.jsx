@@ -4,7 +4,7 @@
 // NPT-by-cause (D) are built in later sections.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
-import { loadDdrDates, loadFleetTotals } from './ddrFleet'
+import { loadDdrDates, loadFleetTotals, loadRigCards } from './ddrFleet'
 import { fmt1, prettyDate, DASH } from './format'
 import { LoadError } from './LoadState'
 
@@ -20,6 +20,7 @@ export default function FleetView() {
   const [dates, setDates] = useState(null)   // available report_dates (desc) | null while loading
   const [date, setDate] = useState('')        // selected date
   const [totals, setTotals] = useState(null)  // fleet totals for the date
+  const [cards, setCards] = useState(null)    // per-rig cards for the date
   const [err, setErr] = useState(null)
   const [loadingTotals, setLoadingTotals] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -35,13 +36,13 @@ export default function FleetView() {
     return () => { cancelled = true }
   }, [reloadKey])
 
-  // Load fleet totals whenever the selected date changes.
+  // Load fleet totals + per-rig cards whenever the selected date changes.
   useEffect(() => {
     if (!date) return
     let cancelled = false
-    setLoadingTotals(true); setErr(null)
-    loadFleetTotals(date)
-      .then((t) => { if (!cancelled) setTotals(t) })
+    setLoadingTotals(true); setErr(null); setCards(null)
+    Promise.all([loadFleetTotals(date), loadRigCards(date)])
+      .then(([t, c]) => { if (!cancelled) { setTotals(t); setCards(c) } })
       .catch((e) => { if (!cancelled) setErr(e.message) })
       .finally(() => { if (!cancelled) setLoadingTotals(false) })
     return () => { cancelled = true }
@@ -102,9 +103,54 @@ export default function FleetView() {
         </div>
       )}
 
-      {totals && totals.reportsReceived === 0 && !loadingTotals && (
-        <div className="panel"><div className="npt-empty">No rig filed a DDR for <b>{prettyDate(date)}</b>. Totals are zero for this date.</div></div>
+      {/* Section B — one card per rig for the selected date */}
+      {cards && (
+        <div className="rig-grid">
+          {cards.map((c) => <RigCardB key={c.rig} c={c} />)}
+        </div>
       )}
+    </div>
+  )
+}
+
+// Per-rig card (Section B). Reporting rig shows the DDR fields; a rig with no DDR
+// for the date shows an honest "no report" state. needs_review -> visible marker.
+function RigCardB({ c }) {
+  if (!c.hasReport) {
+    return (
+      <div className="dept-card rig-cardb rig-cardb-empty">
+        <div className="dept-head"><span className="dept-name">{c.rig}</span></div>
+        <div className="npt-empty sm">No report for this date.</div>
+      </div>
+    )
+  }
+  const val = (v, suffix = '') => (v == null ? DASH : `${v}${suffix}`)
+  const num = (v, suffix = '') => (v == null ? DASH : `${fmt1(v)}${suffix}`)
+  const downtime = c.downtimeDaily == null && c.downtimeCum == null
+    ? DASH
+    : `${c.downtimeDaily == null ? DASH : fmt1(c.downtimeDaily)} hrs${c.downtimeCum == null ? '' : ` · cum ${fmt1(c.downtimeCum)} hrs`}`
+  const rows = [
+    ['Report No', val(c.reportNo)],
+    ['POB', val(c.pob)],
+    ['Well', val(c.well)],
+    ['Days Without LTI', val(c.ltiDays)],
+    ['Daily Diesel Consumption', num(c.dailyDiesel, ' KL')],
+    ['Monthly Rig Downtime', downtime],
+  ]
+  return (
+    <div className={`dept-card rig-cardb${c.needsReview ? ' rig-cardb-review' : ''}`}>
+      <div className="dept-head">
+        <span className="dept-name">{c.rig}</span>
+        {c.needsReview && <span className="review-badge" title="Extraction flagged for review (e.g. hours discrepancy)">⚠ review</span>}
+      </div>
+      <div className="rig-metrics">
+        {rows.map(([label, v]) => (
+          <div className="rig-metric" key={label}>
+            <span className="rm-label">{label}</span>
+            <span className="rm-val">{v}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
