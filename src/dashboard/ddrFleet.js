@@ -59,6 +59,85 @@ export async function loadFleetTotals(date) {
   return { date, reportsReceived, fleetSize, dieselRob: dieselHas ? dieselRob : null, hours }
 }
 
+// Paginated activities fetch (avoids the 1000-row PostgREST cap on long wells).
+async function fetchActivities(reportIds) {
+  if (!reportIds.length) return []
+  const PAGE = 1000
+  const all = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('activities')
+      .select('report_id, code, hrs')
+      .in('report_id', reportIds)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) throw new Error(error.message)
+    if (!data || !data.length) break
+    all.push(...data)
+    if (data.length < PAGE) break
+  }
+  return all
+}
+
+const normWell = (s) => String(s ?? '').trim().toLowerCase()
+
+// Section C — cumulative RODR/NODR/EBDR hours PER RIG for the rig's CURRENT well,
+// accumulated up to the selected date (resets on a new well). The "current well"
+// is the well_no on the rig's DDR for the selected date; only rigs that filed a
+// DDR that date get a bar. Hours = sum of that rig's activity hours (by
+// code_master.condition) across ALL its DDRs for that well with report_date <= date.
+export async function loadDowntimeByRig(date) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!date) return { rigs: [], hasData: false }
+
+  const [rigsRes, codesRes, repRes] = await Promise.all([
+    supabase.from('rigs').select('id, name, sort_order'),
+    supabase.from('code_master').select('code, condition'),
+    supabase.from('reports').select('id, rig_id, report_date, well_no').lte('report_date', date),
+  ])
+  for (const r of [rigsRes, codesRes, repRes]) if (r.error) throw new Error(r.error.message)
+
+  const condByCode = new Map((codesRes.data || []).map((c) => [c.code, c.condition]))
+  const reports = repRes.data || []
+
+  // Current well per rig = well_no on the selected date's report.
+  const currentWell = new Map()
+  for (const r of reports) if (r.report_date === date) currentWell.set(r.rig_id, r.well_no ?? null)
+
+  // Reports for each rig's current well, up to the date.
+  const reportRig = new Map()
+  const relevantIds = []
+  for (const r of reports) {
+    if (!currentWell.has(r.rig_id)) continue
+    if (normWell(r.well_no) === normWell(currentWell.get(r.rig_id))) {
+      relevantIds.push(r.id)
+      reportRig.set(r.id, r.rig_id)
+    }
+  }
+
+  const acts = await fetchActivities(relevantIds)
+  const perRig = new Map()
+  for (const a of acts) {
+    const rigId = reportRig.get(a.report_id)
+    if (!rigId) continue
+    const cond = condByCode.get(a.code)
+    if (!cond) continue
+    const e = perRig.get(rigId) || { RODR: 0, NODR: 0, EBDR: 0 }
+    if (cond in e) e[cond] += Number(a.hrs) || 0
+    perRig.set(rigId, e)
+  }
+
+  const ordered = (rigsRes.data || [])
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999) || String(a.name).localeCompare(String(b.name)))
+
+  const rows = ordered.map((rig) => {
+    if (!currentWell.has(rig.id)) return { rig: rig.name, hasData: false }
+    return { rig: rig.name, well: currentWell.get(rig.id), hasData: true, hours: perRig.get(rig.id) || { RODR: 0, NODR: 0, EBDR: 0 } }
+  })
+  return { rigs: rows, hasData: rows.some((r) => r.hasData) }
+}
+
 // Section B — one card per rig for the selected date. Returns the full fleet in
 // sort_order; a rig with no DDR that date has hasReport=false (honest empty card).
 // Fields per reporting rig: report_no, pob_total, well_no, lti_days (days since
