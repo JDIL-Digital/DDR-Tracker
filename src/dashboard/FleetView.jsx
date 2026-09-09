@@ -1,162 +1,110 @@
-import { useEffect, useMemo, useState } from 'react'
+// Fleet tab — REDESIGN reading from the stored DDR data. Section A only:
+// a date picker (populated from the real DDR report_dates) + five fleet-total
+// KPI cards for the selected date. Per-rig cards (B), downtime chart (C), and
+// NPT-by-cause (D) are built in later sections.
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
-import { loadFleet } from './fleet'
-import { todayISO, fmt1, fmtKl, DASH } from './format'
+import { loadDdrDates, loadFleetTotals } from './ddrFleet'
+import { fmt1, prettyDate, DASH } from './format'
 import { LoadError } from './LoadState'
-import KpiCard from './KpiCard'
-import RigCard from './RigCard'
-import DowntimeChart from './DowntimeChart'
-import NptByCause from './NptByCause'
-import Footer from './Footer'
 
-// Which monthly metric the rig cards are ranked by (click a KPI to toggle).
-const RANK = {
-  odr: { key: 'odrHrs', label: 'Total ODR' },
-  nodr: { key: 'nodrHrs', label: 'Total NODR' },
-  ebdr: { key: 'ebdrHrs', label: 'Total EBDR' },
-  diesel: { key: 'dieselRob', label: 'Total Diesel ROB' },
-}
+const KPIS = [
+  { key: 'odr', label: 'Total ODR', cls: 'kpi-completed', sub: 'RODR hrs' },
+  { key: 'nodr', label: 'Total NODR', cls: 'kpi-routine', sub: 'NODR hrs' },
+  { key: 'ebdr', label: 'Total EBDR', cls: 'kpi-pending', sub: 'EBDR hrs (NPT)' },
+  { key: 'diesel', label: 'Total Diesel ROB', cls: 'kpi-planned', sub: 'KL, rigs reporting' },
+  { key: 'reports', label: 'Reports Received', cls: 'kpi-planned', sub: 'rigs with a DDR' },
+]
 
-export default function FleetView({ highlightRig = null }) {
-  const [date, setDate] = useState(todayISO())
-  const [view, setView] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+export default function FleetView() {
+  const [dates, setDates] = useState(null)   // available report_dates (desc) | null while loading
+  const [date, setDate] = useState('')        // selected date
+  const [totals, setTotals] = useState(null)  // fleet totals for the date
+  const [err, setErr] = useState(null)
+  const [loadingTotals, setLoadingTotals] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const retry = () => setReloadKey((k) => k + 1)
 
-  // Active ranking metric: null | 'odr' | 'nodr' | 'ebdr' | 'diesel'.
-  const [rankBy, setRankBy] = useState(null)
-  const toggleRank = (m) => setRankBy((cur) => (cur === m ? null : m))
-
+  // Load the available DDR dates once; default to the most recent.
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    loadFleet(date)
-      .then((v) => { if (!cancelled) setView(v) })
-      .catch((e) => { if (!cancelled) setError(e.message) })
-      .finally(() => { if (!cancelled) setLoading(false) })
+    setErr(null); setDates(null)
+    loadDdrDates()
+      .then((ds) => { if (cancelled) return; setDates(ds); setDate((d) => d || ds[0] || '') })
+      .catch((e) => { if (!cancelled) setErr(e.message) })
     return () => { cancelled = true }
-  }, [date, reloadKey])
+  }, [reloadKey])
 
-  const k = view?.kpis
-
-  // When arriving via search, scroll the highlighted rig card into view.
+  // Load fleet totals whenever the selected date changes.
   useEffect(() => {
-    if (!highlightRig || !view) return
-    const el = document.querySelector(`[data-rig="${highlightRig.replace(/"/g, '\\"')}"]`)
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [highlightRig, view])
+    if (!date) return
+    let cancelled = false
+    setLoadingTotals(true); setErr(null)
+    loadFleetTotals(date)
+      .then((t) => { if (!cancelled) setTotals(t) })
+      .catch((e) => { if (!cancelled) setErr(e.message) })
+      .finally(() => { if (!cancelled) setLoadingTotals(false) })
+    return () => { cancelled = true }
+  }, [date])
 
-  // Rig cards, optionally ranked by the active metric (highest first; missing → last).
-  const rigsToShow = useMemo(() => {
-    const base = view?.rigs || []
-    if (!rankBy) return base
-    const key = RANK[rankBy].key
-    return [...base].sort((a, b) => (b[key] ?? -1) - (a[key] ?? -1))
-  }, [view, rankBy])
+  const values = useMemo(() => {
+    if (!totals) return null
+    return {
+      odr: fmt1(totals.hours.RODR),
+      nodr: fmt1(totals.hours.NODR),
+      ebdr: fmt1(totals.hours.EBDR),
+      diesel: totals.dieselRob == null ? DASH : fmt1(totals.dieselRob),
+      reports: `${totals.reportsReceived} / ${totals.fleetSize}`,
+    }
+  }, [totals])
 
   if (!isSupabaseConfigured) {
-    return (
-      <div className="wrap">
-        <div className="state err">
-          Supabase is not configured. Fill VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in
-          .env.local and restart the dev server.
-        </div>
-      </div>
-    )
+    return <div className="wrap"><div className="state err">Supabase is not configured. Fill VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in .env.local and restart.</div></div>
+  }
+  if (err) return <div className="wrap"><LoadError message={err} onRetry={retry} /></div>
+  if (dates === null) return <div className="wrap"><div className="state">Loading fleet…</div></div>
+  if (dates.length === 0) {
+    return <div className="wrap"><div className="npt-empty">No drilling reports yet. Fleet KPIs appear here once DDRs are ingested.</div></div>
   }
 
-  const hrsVal = (n) => (k?.monthHasData ? fmt1(n) : DASH)
-
   return (
-    <>
-      <div className="wrap">
-        <div className="kpis kpis-5">
-          <KpiCard
-            color="green"
-            label="Total ODR"
-            value={hrsVal(k?.totalOdr)}
-            unit="hrs"
-            foot={k ? `${k.monthLabel} · on day rate` : ''}
-            onClick={() => toggleRank('odr')}
-            active={rankBy === 'odr'}
-          />
-          <KpiCard
-            color="amber"
-            label="Total NODR"
-            value={hrsVal(k?.totalNodr)}
-            unit="hrs"
-            foot={k ? `${k.monthLabel} · non-operating` : ''}
-            onClick={() => toggleRank('nodr')}
-            active={rankBy === 'nodr'}
-          />
-          <KpiCard
-            color="red"
-            label="Total EBDR"
-            value={hrsVal(k?.totalEbdr)}
-            unit="hrs"
-            foot={k ? `${k.monthLabel} · downtime (NPT)` : ''}
-            footClass="down"
-            onClick={() => toggleRank('ebdr')}
-            active={rankBy === 'ebdr'}
-          />
-          <KpiCard
-            color="amber"
-            label="Total Diesel ROB"
-            value={fmtKl(k?.dieselRob)}
-            unit="KL"
-            foot={
-              k?.dieselConsumed != null ? (
-                <><span className="down">▼ {fmtKl(k.dieselConsumed)} KL</span> consumed</>
-              ) : (
-                'latest fuel figure'
-              )
-            }
-            onClick={() => toggleRank('diesel')}
-            active={rankBy === 'diesel'}
-          />
-          <KpiCard
-            color="green"
-            label="Reports received"
-            value={k ? String(k.reportsReceived).padStart(2, '0') : '—'}
-            unit={k ? `/ ${String(k.fleetSize).padStart(2, '0')}` : ''}
-            foot={k ? 'selected date' : ''}
-          />
-        </div>
-
-        <div className="sec-h">
-          <span className="rank-note">
-            {rankBy && k ? `Ranked by ${RANK[rankBy].label} · ${k.monthLabel} (highest first)` : ''}
-          </span>
-          <div className="datectl">
-            <label htmlFor="datepick">Date</label>
-            <input id="datepick" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            <span className="hint">{loading ? 'Loading…' : 'Metrics from submitted DDRs only'}</span>
+    <div className="wrap maint-dash">
+      {/* Toolbar: DDR date picker (real report dates) */}
+      <div className="maint-toolbar">
+        <label className="maint-pick">
+          <span>Report date</span>
+          <select value={date} onChange={(e) => setDate(e.target.value)}>
+            {dates.map((d) => <option key={d} value={d}>{prettyDate(d)}</option>)}
+          </select>
+        </label>
+        <div className="maint-header" style={{ margin: 0 }}>
+          <div>
+            <div className="maint-sub">
+              <span className="spill s-approved">Fleet</span>
+              <span className="maint-date">Drilling totals · {prettyDate(date)}</span>
+            </div>
           </div>
         </div>
-
-        {error ? (
-          <LoadError message={error} onRetry={retry} />
-        ) : !view ? (
-          <div className="state">Loading fleet…</div>
-        ) : (
-          <>
-            <div className="rigs">
-              {rigsToShow.map((r) => (
-                <RigCard key={r.name} rig={r} highlighted={r.name === highlightRig} />
-              ))}
-            </div>
-            <div className="bottom">
-              <DowntimeChart data={view.downtimeChart} hasData={view.downtimeHasData} />
-              <NptByCause data={view.nptByCause} />
-            </div>
-          </>
-        )}
       </div>
 
-      {view && !error ? <Footer counts={view.statusCounts} /> : null}
-    </>
+      {/* Section A — five fleet-total KPI cards for the selected date */}
+      {loadingTotals || !values ? (
+        <div className="state">Loading totals…</div>
+      ) : (
+        <div className="kpi-row">
+          {KPIS.map((kpi) => (
+            <div key={kpi.key} className={`kpi ${kpi.cls}`}>
+              <div className="kpi-num">{values[kpi.key]}</div>
+              <div className="kpi-label">{kpi.label}</div>
+              <div className="kpi-sub">{kpi.sub}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {totals && totals.reportsReceived === 0 && !loadingTotals && (
+        <div className="panel"><div className="npt-empty">No rig filed a DDR for <b>{prettyDate(date)}</b>. Totals are zero for this date.</div></div>
+      )}
+    </div>
   )
 }
