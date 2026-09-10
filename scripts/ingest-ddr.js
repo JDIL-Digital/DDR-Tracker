@@ -27,10 +27,14 @@ import { pathToFileURL } from 'node:url'
 import { getGmailClient, getMessageFull } from './gmail-auth.js'
 import { getServerClient } from './supabase-server.js'
 import { classifyMessage, selectDdrXlsx, normRig } from './ddr-match.js'
-import { extractDDR, validate } from './extract-ddr.js'
+import { extractDDR, validate, excelToLines } from './extract-ddr.js'
 
 const BUCKET = 'drilling-reports'
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+// A daily DDR is a few hundred/thousand non-empty cells across its sheets; a
+// season/master workbook is far larger. Above this, don't extract (flag instead)
+// so a master can never overflow the model prompt (400). Tunable.
+const MAX_CELLS = 8000
 
 const safeName = (n) => String(n || 'file.xlsx').replace(/[^a-zA-Z0-9._-]/g, '_')
 function truncate(s, n) { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s }
@@ -73,7 +77,7 @@ async function main() {
   const days = daysIdx !== -1 ? parseInt(args[daysIdx + 1], 10) || 7 : 7
   const matchIdx = args.indexOf('--match')
   const matchStr = matchIdx !== -1 ? String(args[matchIdx + 1] || '').toLowerCase() : null
-  const query = `newer_than:${days}d has:attachment filename:xlsx`
+  const query = `newer_than:${days}d has:attachment (filename:xlsx OR filename:xls)`
 
   console.log('DDR auto-ingest')
   console.log(`Mode    : ${doSave ? 'SAVE' : 'DRY RUN (report only)'}${doExtract ? ' + EXTRACT' : ''}`)
@@ -162,6 +166,16 @@ async function main() {
         const tmpFile = path.join(tmpDir, safeName(att.filename))
         writeFileSync(tmpFile, buf)
         try {
+          // Size guard: a daily DDR is a few hundred/thousand non-empty cells; a
+          // season/master workbook is tens of thousands. Never feed a master to
+          // the extractor (it overflows the model prompt -> 400) — flag instead.
+          const cellCount = excelToLines(tmpFile).length
+          if (cellCount > MAX_CELLS) {
+            action += ` -> SKIPPED extract: workbook too large (${cellCount} non-empty cells > ${MAX_CELLS}) — likely a season/master file, NOT a daily DDR — needs_review`
+            needsReview.push({ label, reason: `workbook "${att.filename}" too large (${cellCount} cells) — likely a master workbook; not extracted` })
+            results.push({ label, action })
+            continue
+          }
           const { result, codes, roster } = await extractDDR(tmpFile)
           const { checks } = validate(result, codes, roster)
           const allPass = checks.every((ch) => ch.pass)

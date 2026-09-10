@@ -20,14 +20,24 @@ export const RIG_ALIASES = [
   { canonical: 'Jindal Supreme',  aliases: ['JSUP', 'JINDAL SUPREME'] },
   { canonical: 'Jindal Pioneer',  aliases: ['JPION', 'JINDAL PIONEER'] },
   { canonical: 'Jindal Star',     aliases: ['JSTAR', 'JINDAL STAR'] },
-  { canonical: 'Virtue-1',        aliases: ['VIR1', 'VIRTUE 1', 'VIRTUE-1'] },
+  { canonical: 'Virtue-1',        aliases: ['VIR1', 'VIRTUE 1', 'VIRTUE-1', 'VIRTUE I'] },
   { canonical: 'Jindal Explorer', aliases: ['JEXP', 'JINDAL EXPLORER'] },
   { canonical: 'Discovery-1',     aliases: ['DISC1', 'DISCOVERY 1', 'DISC-1', 'DISCOVERY-1'] },
 ]
 
 // Normalize: lowercase + strip everything except a-z0-9 (so "DISC-1","DISC 1",
 // "DISC1" all collapse to "disc1"; "JINDAL STAR"/"jindalstar" to "jindalstar").
+// Used everywhere (storage paths, filename selection) — do NOT loosen this one.
 export const normRig = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+// LOOSER form used ONLY for rig-name matching (matchRig): additionally treats the
+// letter i/o as the digit 1/0 — the common Roman-numeral / OCR-typo variants
+// ("VIRTUE I" == "Virtue 1", "DISC O" == "DISC 0"). Kept separate from normRig so
+// it never touches storage paths or filenames. SAFETY: this only equates i<->1 and
+// o<->0; the 6 canonical rig names are distinct well beyond those characters, so it
+// broadens each rig's OWN variants and cannot merge two different rigs (see the
+// unit tests). A subject that matches no alias still returns null (flagged).
+const normRigMatch = (s) => normRig(s).replace(/i/g, '1').replace(/o/g, '0')
 
 // Strip one or more leading RE:/FW:/FWD: prefixes.
 export const stripReplyPrefix = (s) =>
@@ -52,10 +62,10 @@ export function collectAttachments(payload) {
 // Match a rig by any alias appearing in the normalized subject. Returns the
 // canonical name, or null if none match.
 export function matchRig(subject) {
-  const nsub = normRig(subject)
+  const nsub = normRigMatch(subject)
   if (!nsub) return null
   for (const { canonical, aliases } of RIG_ALIASES) {
-    for (const a of aliases) if (nsub.includes(normRig(a))) return canonical
+    for (const a of aliases) if (nsub.includes(normRigMatch(a))) return canonical
   }
   return null
 }
@@ -107,7 +117,9 @@ export function classifyMessage(data) {
   const date = headerValue(payload, 'Date')
   const s = stripReplyPrefix(subject)
   const atts = collectAttachments(payload)
-  const xlsx = atts.filter((a) => /\.xlsx$/i.test(a.filename))
+  // Accept BOTH .xlsx and old .xls (SheetJS XLSX.read handles both). Some rigs
+  // send the daily DDR as .xls alongside an .xlsx season/master workbook.
+  const xlsx = atts.filter((a) => /\.xlsx?$/i.test(a.filename))
   const base = { id: data.id, subject, from, date }
 
   const { hasDDR, isRevised } = ddrToken(s)
@@ -116,7 +128,7 @@ export function classifyMessage(data) {
 
   if (!hasDDR) return { ...base, status: 'excluded', reason: 'no DDR/RDDR token in subject' }
   if (!xlsx.length) {
-    return { ...base, status: 'excluded', reason: 'DDR subject but no .xlsx attachment' + (atts.length ? ` (has: ${atts.map((a) => a.filename).join(', ')})` : ' (no attachments)') }
+    return { ...base, status: 'excluded', reason: 'DDR subject but no .xls/.xlsx attachment' + (atts.length ? ` (has: ${atts.map((a) => a.filename).join(', ')})` : ' (no attachments)') }
   }
   // Looks like a DDR (token + xlsx) — now it MUST resolve a rig + date, else flag.
   if (!rig) return { ...base, status: 'flagged', reason: 'looks like a DDR but rig not matched', dateISO, is_revised: isRevised, xlsx }
