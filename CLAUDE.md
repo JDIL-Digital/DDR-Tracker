@@ -202,19 +202,53 @@ real --save to the DB. Stages:
 - VERIFY IN THE DB, NOT THE LOG: the ingest log printed "STORED" while nothing persisted (files
   stored, --extract missing). Always confirm report rows/markers in the DB after a run.
 
-## DDR — REAL-WORLD DATA QUIRKS OBSERVED
-- RDDR supersede keys on the EXTRACTED SHEET date (trust the document), not the subject date. Today
-  a "JINDAL STAR_RDDR_08-09-2026" email carried an attachment/sheet dated 09-09, so it correctly
-  saved a separate Jindal Star 2026-09-09 report (needs_review, 3 acts) rather than revising 08-09.
-  This is correct "trust the source" behavior; the mislabeled subject is a rig-side data-quality
-  issue to raise with the rig. KEEP current behavior (trust sheet date).
-- Jindal Supreme DDRs currently have NO date in subject ("DDR-DPR Jindal Supreme") → skipped/flagged,
-  not ingested (per decision, no date guessing). Supreme to switch to RIG_DDR_DATE format.
-- lti_days = days SINCE last LTI (injury-free streak); label "Days Without LTI" on dashboard.
+## DDR — FLEET DASHBOARD COMPLETE (live on main)
+Redesigned Fleet tab reads live DDR data. 4 sections, all DB-verified, all reconcile A↔C↔D:
+- A: date picker (from real report_dates, defaults to most recent) + 5 fleet-total KPIs (Total ODR
+  [RODR hrs] / NODR / EBDR / Diesel ROB [1dp KL] / Reports Received [n/6]).
+- B: per-rig cards (Report No, POB, Well, Days Without LTI, Daily Diesel Consumption, Monthly Rig
+  Downtime) + needs_review ⚠ badge; honest "no report for this date" cards; null-vs-zero honestly
+  distinguished (— = not reported, 0 = reported zero).
+- C: grouped bar chart — cumulative RODR/NODR/EBDR per rig for its CURRENT well (reset on new well),
+  up to selected date. RODR green / NODR amber / EBDR red.
+- D: NPT by cause per rig — NODR+EBDR grouped by IADC code (+ description + condition badge), with
+  OIM + date; MDR EXCLUDED from NPT (shown separately if present).
+- Data layer: src/dashboard/ddrFleet.js (loadDdrDates, loadFleetTotals, loadRigCards,
+  loadDowntimeByRig, loadNptByCause — RODR/NODR/EBDR via code_master.condition, paginated to avoid
+  the 1000-row cap). FleetView.jsx rewritten. On main + republished.
 
-## DDR — REMAINING
-- Fix the scheduler deployment so --extract actually runs in production (Republish must take effect).
-- Fleet dashboard (spec A/B/C/D) reading DDR data, with needs_review/hours-discrepancy indicator.
+## DDR — MATCHER ROBUSTNESS + .xls SUPPORT (live on main)
+- normRigMatch: treats letter I↔digit 1 and letter O↔digit 0 in rig-name MATCHING only (exported
+  normRig for storage paths unchanged — bucket folders stay discovery1/jindalstar/etc). Fixes
+  "VIRTUE I" → Virtue-1. 22/22 unit tests, no cross-match, non-matching subjects still flag.
+- Accept BOTH .xls and .xlsx (/\.xlsx?$/i); Gmail prefilter (filename:xlsx OR filename:xls). Virtue-1
+  sends old .xls format.
+- MAX_CELLS (8000) size guard: a master/season workbook (e.g. Virtue's 685KB DRR_Virtue_1_2025-26.xlsx)
+  is flagged needs_review, NEVER sent to the extractor (prevents the 400 that blocked Virtue). Protects
+  all rigs. selectDdrXlsx prefers the date+rig-matching file so the daily beats the master.
+
+## DDR — DATA CLEANUP (done)
+Deleted all reports dated <= 2026-09-08 (11 reports + 89 activities + 10 bucket files, incl. the
+mislabeled-RDDR archive) to establish a CLEAN BASELINE. KEPT: exactly the 4 Sep-09 reports
+(Discovery-1, Jindal Star, Jindal Explorer, Virtue-1, all ok), the rigs table (6), and all 14
+processed_emails markers (so deleted old emails do NOT re-ingest). DB now = 4 clean Sep-09 DDRs.
+4 rigs now filing correctly: Jindal Star, Jindal Explorer, Discovery-1, Virtue-1.
+
+## DDR — RECURRING SUBJECT/FORMAT QUIRKS (raise with rig teams)
+- Virtue-1: subject "VIRTUE I" (letter I not digit 1) + sends .xls + attaches a huge master workbook.
+  Handled in-pipeline now, but ideally they send just the daily .xlsx named correctly.
+- Jindal Supreme: still "DDR-DPR Jindal Supreme" with NO date in subject → skipped (no date guessing).
+  Needs to switch to RIG_DDR_DATE.
+- Mislabeled RDDR earlier (subject RDDR_08-09 but sheet dated 09-09) — extractor correctly trusts the
+  sheet date (RDDR supersede keys on the EXTRACTED SHEET date, not the subject). Rig-side data-quality issue.
+- lti_days = days SINCE last LTI (injury-free streak); label "Days Without LTI" on the dashboard.
+
+## DDR — STANDING / NEXT
+- ⚠️ AUTOMATIC UPLOAD: user reports the scheduled run "didn't work" — needs diagnosis. Also the
+  scheduler must git-pull + REPUBLISH from current main so the matcher-robust + .xls + Fleet code is
+  in the deployed snapshot. Scheduler runs the PUBLISHED snapshot (no auto-pull); DDR run command
+  must include --extract.
+- User mentioned wanting to make some dashboard "required changes" (TBD).
 - OPEN: MDR-as-NPT decision (pending team).
 
 ## DMR AUTO-INGEST PIPELINE — FULLY DEPLOYED & AUTOMATIC (done this session)
