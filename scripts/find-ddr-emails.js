@@ -35,7 +35,7 @@ async function main() {
   const di = args.indexOf('--days')
   const days = di !== -1 ? parseInt(args[di + 1], 10) || 7 : 7
   // Prefilter: DDRs carry an .xlsx attachment; narrow to those, classify in code.
-  const query = `newer_than:${days}d has:attachment filename:xlsx`
+  const query = `newer_than:${days}d has:attachment (filename:xlsx OR filename:xls)`
 
   const gmail = getGmailClient()
   const ids = await listAll(gmail, query)
