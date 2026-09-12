@@ -139,6 +139,39 @@ export async function uploadWellPlan({ rigId, wellName, wellType, file, userId }
   if (error) throw new Error(`Saved file but the record insert failed: ${error.message}`)
 }
 
+// --- Well Plan extraction (on-demand, via the server-side extract worker) ----
+// Extraction needs the ANTHROPIC + Supabase SECRET keys, which never touch the
+// browser. So the button POSTs the well_plan_id + the signed-in user's Supabase
+// access token to the extract worker (VITE_EXTRACT_WORKER_URL). The worker
+// verifies the token + approval server-side, runs the extractor, writes back,
+// and returns a summary. On success the caller reloads loadWellPlans() to show
+// the new data. Any approved user may extract (the worker enforces this).
+export async function runExtraction(wellPlanId) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  const base = import.meta.env.VITE_EXTRACT_WORKER_URL
+  if (!base) throw new Error('Extraction service is not configured (VITE_EXTRACT_WORKER_URL is unset).')
+
+  const { data: { session } } = await supabase.auth.getSession()
+  const token = session?.access_token
+  if (!token) throw new Error('You must be signed in to extract.')
+
+  let res
+  try {
+    res = await fetch(`${base.replace(/\/$/, '')}/extract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ well_plan_id: wellPlanId }),
+    })
+  } catch (e) {
+    throw new Error(`Could not reach the extraction service: ${e.message}`)
+  }
+
+  let payload = null
+  try { payload = await res.json() } catch { /* non-JSON response */ }
+  if (!res.ok) throw new Error(payload?.error || `Extraction failed (HTTP ${res.status}).`)
+  return payload // { status, method, detail, fields }
+}
+
 export function loadActivityCodes() {
   return cached('activityCodes', [], async () => {
     if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
