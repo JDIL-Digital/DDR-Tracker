@@ -664,6 +664,35 @@ body {
 .mini-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .mini-btn.approve:hover:not(:disabled) { border-color: var(--green); color: var(--green); background: rgba(31, 181, 94, 0.1); }
 .mini-btn.reject:hover:not(:disabled) { border-color: var(--red); color: var(--red); background: rgba(240, 74, 66, 0.1); }
+.mini-btn.extract:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); background: rgba(62, 143, 224, 0.1); }
+.mini-btn.extract:disabled { opacity: 0.75; } /* keep the spinner legible while busy */
+
+/* Inline spinner for the Extract button (no external assets). */
+.spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 2px;
+  vertical-align: -1px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: mini-spin 0.7s linear infinite;
+}
+@keyframes mini-spin { to { transform: rotate(360deg); } }
+
+/* Per-row extraction result message under the action buttons. */
+.wp-extract-msg {
+  margin-top: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: normal;
+  text-align: right;
+  max-width: 260px;
+  margin-left: auto;
+}
+.wp-extract-msg.ok { color: var(--green); }
+.wp-extract-msg.err { color: var(--red); }
 .you-tag {
   margin-left: 7px;
   font-size: 9.5px;

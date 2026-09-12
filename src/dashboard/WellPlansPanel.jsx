@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthProvider'
-import { loadRigsForPicker, loadWellPlans, uploadWellPlan, deleteWellPlan } from './settings'
+import { loadRigsForPicker, loadWellPlans, uploadWellPlan, deleteWellPlan, runExtraction } from './settings'
 import { prettyDate } from './format'
 import { LoadError } from './LoadState'
 import WellPlanDetail from './WellPlanDetail'
@@ -18,7 +18,8 @@ function statusClass(s) {
 // the 'well-plans' bucket and the well_plans table with status 'uploaded'. No
 // extraction yet — just store and list.
 export default function WellPlansPanel() {
-  const { user, isAdmin } = useAuth()
+  const { user, isAdmin, profileStatus } = useAuth()
+  const isApproved = profileStatus === 'approved' // any approved user may extract
   const [rigs, setRigs] = useState([])
   const [plans, setPlans] = useState(null)
   const [err, setErr] = useState(null)
@@ -35,6 +36,10 @@ export default function WellPlansPanel() {
   const [selectedId, setSelectedId] = useState(null)
   const [startEdit, setStartEdit] = useState(false)
   const [busyId, setBusyId] = useState(null)
+
+  // Per-row extraction state: which row is extracting, and its last inline result.
+  const [extractBusyId, setExtractBusyId] = useState(null)
+  const [extractMsg, setExtractMsg] = useState({}) // { [planId]: { type:'ok'|'err', text } }
 
   const load = useCallback(() => {
     setErr(null)
@@ -63,6 +68,24 @@ export default function WellPlansPanel() {
       setErr(e.message)
     } finally {
       setBusyId(null)
+    }
+  }
+
+  async function onExtract(plan) {
+    setExtractBusyId(plan.id)
+    setExtractMsg((m) => ({ ...m, [plan.id]: null }))
+    try {
+      const r = await runExtraction(plan.id)
+      const bits = []
+      if (r?.fields?.total_planned_days != null) bits.push(`${r.fields.total_planned_days}d`)
+      if (r?.fields?.milestones) bits.push(`${r.fields.milestones} milestones`)
+      const detail = bits.length ? ` (${bits.join(', ')})` : ''
+      setExtractMsg((m) => ({ ...m, [plan.id]: { type: 'ok', text: `✓ ${r?.status || 'done'}${detail}` } }))
+      setPlans(await loadWellPlans()) // refresh so the row shows the extracted data
+    } catch (e) {
+      setExtractMsg((m) => ({ ...m, [plan.id]: { type: 'err', text: e.message } }))
+    } finally {
+      setExtractBusyId(null)
     }
   }
 
@@ -103,7 +126,7 @@ export default function WellPlansPanel() {
   return (
     <div className="panel accent" style={{ '--k': 'var(--blue)' }}>
       <h3>Well Plans</h3>
-      <div className="psub">Upload a GTO / well-data PDF or Word doc · stored only (extraction comes later)</div>
+      <div className="psub">Upload a GTO / well-data PDF or Word doc, then <b>Extract</b> to pull planned days, milestones &amp; history</div>
 
       {err && <LoadError message={err} onRetry={load} />}
 
@@ -163,8 +186,24 @@ export default function WellPlansPanel() {
                   <td>{p.created_at ? prettyDate(String(p.created_at).slice(0, 10)) : '—'}</td>
                   <td className="ta-r" onClick={(e) => e.stopPropagation()}>
                     <button type="button" className="mini-btn" onClick={() => openDetail(p.id)}>View</button>
+                    {isApproved && (
+                      <button
+                        type="button"
+                        className="mini-btn extract"
+                        disabled={extractBusyId === p.id}
+                        onClick={() => onExtract(p)}
+                        title="Run the server-side extractor for this plan"
+                      >
+                        {extractBusyId === p.id
+                          ? <><span className="spin" aria-hidden="true" /> Extracting…</>
+                          : (p.extraction_status === 'extracted' ? 'Re-extract' : 'Extract')}
+                      </button>
+                    )}
                     {isAdmin && <button type="button" className="mini-btn" onClick={() => openDetail(p.id, true)}>Edit</button>}
                     {isAdmin && <button type="button" className="mini-btn reject" disabled={busyId === p.id} onClick={() => onDelete(p)}>Delete</button>}
+                    {extractMsg[p.id] && (
+                      <div className={`wp-extract-msg ${extractMsg[p.id].type}`}>{extractMsg[p.id].text}</div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -173,8 +212,9 @@ export default function WellPlansPanel() {
         </div>
       )}
       <div className="setting-note">
-        Stage 1: files are stored in the <code>well-plans</code> bucket with status <b>uploaded</b>.
-        Extraction (planned days, milestones, well history) comes in the next stage.
+        Files are stored in the <code>well-plans</code> bucket. Click <b>Extract</b> on a plan to run
+        the server-side extractor (planned days, milestones, well history); the status pill turns
+        <b> extracted</b> when it finishes. Any approved user can extract.
       </div>
     </div>
   )
