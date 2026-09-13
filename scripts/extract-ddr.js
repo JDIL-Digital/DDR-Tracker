@@ -25,12 +25,19 @@ const HRS_TARGET = 24
 const HRS_TOLERANCE = 0.5
 
 // --- Load ANTHROPIC_API_KEY from .env.local (no dependency on dotenv) --------
+// process.env wins: if the key is already in the environment (Replit Secrets /
+// real env), return early and DON'T require a .env.local file. A missing
+// .env.local is optional (local dev convenience only), never fatal — mirrors
+// supabase-server.js's ensureEnvLoaded() so the deployed pipeline can run purely
+// on Secrets. (The final ANTHROPIC_API_KEY presence check lives at use-time in
+// extractDDR(), which throws a clear error if it's still unset.)
 export function loadEnvLocal() {
+  if (process.env.ANTHROPIC_API_KEY) return // already provided by the environment
   let text
   try {
     text = readFileSync('.env.local', 'utf8')
   } catch {
-    throw new Error('.env.local not found in the project root.')
+    return // no .env.local — fine; env may supply the key directly
   }
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim()
