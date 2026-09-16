@@ -1722,3 +1722,33 @@ body {
 @media (max-width: 900px) {
   .settings-layout { grid-template-columns: 1fr; }
 }
+
+/* --- Daily Activity Summary (Reports add-on) ------------------------------- */
+.das-stack { margin-top: 16px; }
+.das-controls { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 14px; }
+.das-field { display: flex; flex-direction: column; gap: 5px; }
+.das-field > span { font-size: 11px; color: var(--muted); font-weight: 600; }
+.das-field select,
+.das-field input[type='date'] {
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border2);
+  background: var(--card2);
+  color: var(--text);
+  font-size: 13px;
+}
+.das-field select:focus,
+.das-field input[type='date']:focus { border-color: var(--blue); outline: none; }
+
+/* Red headers for Break Down + the three Short Deployment columns (per reference). */
+.das-table th.das-red { color: var(--red); }
+.das-table td.das-pending { color: var(--dim); text-align: right; }
+
+/* Remarks column: the only wrapping cell — a readable chronological log. */
+.das-table td, .das-table th { vertical-align: top; }
+.das-table td.das-remarks { white-space: normal; min-width: 340px; max-width: 560px; }
+.das-table td.nowrap { white-space: nowrap; }
+.das-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.das-log li { font-size: 12px; line-height: 1.45; }
+.das-time { color: var(--blue); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.das-muted { color: var(--dim); }

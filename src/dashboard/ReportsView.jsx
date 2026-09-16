@@ -9,6 +9,7 @@ import TimeByCodePanel from './TimeByCodePanel'
 import NptReportPanel from './NptReportPanel'
 import EquipmentDowntimePanel from './EquipmentDowntimePanel'
 import FuelConsumptionPanel from './FuelConsumptionPanel'
+import DailyActivitySummary from './DailyActivitySummary'
 
 function computeRange(mode, cs, ce) {
   const end = mode === 'custom' ? ce : todayISO()
@@ -167,6 +168,12 @@ export default function ReportsView() {
           <FuelConsumptionPanel avgDailyKl={view.avgDailyKl} avgLhr={view.avgLhr} trend={view.fuelTrend} />
         </div>
       )}
+
+      {/* Daily Activity Summary — independent add-on (own rig + date-range controls),
+          appended below the existing panels; renders regardless of the main report state. */}
+      <div className="stack report-stack das-stack">
+        <DailyActivitySummary />
+      </div>
     </div>
   )
 }

@@ -97,3 +97,83 @@ async function _loadReports(start, end) {
 export function loadReports(start, end) {
   return cached('reports', [start, end], () => _loadReports(start, end))
 }
+
+// --- Daily Activity Summary (single rig) ------------------------------------
+// One row per own-day report_date for ONE rig in [start,end]. Hours are split by
+// the authoritative IADC code_master.condition:
+//   Operating = RODR · Non-Operating = NODR · Moving = MDR · Break Down = EBDR.
+// Remarks = each activity as a time-stamped VERBATIM line (rig's exact wording),
+// in chronological order — a professional daily drilling log. Nothing invented:
+// a rig with no reports returns rows:[]; a day with no activities has empty
+// remarks. (Short Deployment figures are NOT in the DDR yet — the UI shows "—".)
+export async function loadDailyActivitySummary(rigId, start, end) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId) return { rows: [], hasRig: false }
+
+  const [codesRes, repRes] = await Promise.all([
+    supabase.from('code_master').select('code, condition'),
+    supabase
+      .from('reports')
+      .select('id, report_date, well_no, report_no')
+      .eq('rig_id', rigId)
+      .gte('report_date', start)
+      .lte('report_date', end)
+      .order('report_date', { ascending: true }),
+  ])
+  if (codesRes.error) throw new Error(codesRes.error.message)
+  if (repRes.error) throw new Error(repRes.error.message)
+
+  const condByCode = new Map((codesRes.data || []).map((c) => [c.code, c.condition]))
+  const reports = repRes.data || []
+  const reportIds = reports.map((r) => r.id)
+
+  // Paginate activities to dodge the 1000-row PostgREST cap over a long range.
+  const activities = []
+  if (reportIds.length) {
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('activities')
+        .select('report_id, time_from, time_to, hrs, code, remarks')
+        .in('report_id', reportIds)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(error.message)
+      if (!data || !data.length) break
+      activities.push(...data)
+      if (data.length < PAGE) break
+    }
+  }
+
+  const actsByReport = new Map()
+  for (const a of activities) {
+    if (!actsByReport.has(a.report_id)) actsByReport.set(a.report_id, [])
+    actsByReport.get(a.report_id).push(a)
+  }
+
+  const rows = reports.map((rep) => {
+    const acts = actsByReport.get(rep.id) || []
+    const sums = { RODR: 0, NODR: 0, MDR: 0, EBDR: 0 }
+    for (const a of acts) {
+      const cond = condByCode.get(a.code)
+      if (cond && cond in sums) sums[cond] += Number(a.hrs) || 0
+    }
+    const remarks = acts
+      .slice()
+      .sort((a, b) => String(a.time_from ?? '').localeCompare(String(b.time_from ?? '')))
+      .map((a) => ({ from: a.time_from ?? null, to: a.time_to ?? null, text: a.remarks ?? '' }))
+    return {
+      date: rep.report_date,
+      well: rep.well_no ?? null,
+      reportNo: rep.report_no ?? null,
+      operating: sums.RODR,
+      nonOperating: sums.NODR,
+      moving: sums.MDR,
+      breakDown: sums.EBDR,
+      total: sums.RODR + sums.NODR + sums.MDR + sums.EBDR,
+      remarks,
+    }
+  })
+
+  return { rows, hasRig: true }
+}
