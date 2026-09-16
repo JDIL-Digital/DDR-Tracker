@@ -8,12 +8,6 @@ import { cached } from './dataCache'
 
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
-function drillMeterageOf(a) {
-  if (a.meterage_m != null) return a.meterage_m
-  if (a.depth_out_m != null && a.depth_in_m != null) return Math.max(a.depth_out_m - a.depth_in_m, 0)
-  return 0
-}
-
 // Equipment-downtime codes are detected from the real code_master descriptions
 // (repair / equipment / breakdown / maintenance) — not hardcoded.
 const EQUIP_RE = /repair|equipment|breakdown|maintenance/i
@@ -44,7 +38,7 @@ async function _loadReports(start, end) {
   if (reportIds.length) {
     const actRes = await supabase
       .from('activities')
-      .select('report_id, code, hrs, depth_in_m, depth_out_m, meterage_m, remarks, seq')
+      .select('report_id, code, hrs, remarks, seq')
       .in('report_id', reportIds)
     if (actRes.error) throw new Error(actRes.error.message)
     activities = actRes.data || []
@@ -52,7 +46,6 @@ async function _loadReports(start, end) {
 
   const codeMap = new Map(codes.map((c) => [c.code, c]))
   const nptCodes = new Set(codes.filter((c) => c.is_npt).map((c) => c.code))
-  const drillingCodes = new Set(codes.filter((c) => /drilling/i.test(c.description)).map((c) => c.code))
   const equipCodes = new Set(codes.filter((c) => EQUIP_RE.test(c.description || '')).map((c) => c.code))
 
   const rigById = new Map(rigs.map((r) => [r.id, r]))
@@ -66,7 +59,6 @@ async function _loadReports(start, end) {
   const acts = activities.map((a) => {
     const rep = repById.get(a.report_id)
     const cm = codeMap.get(a.code)
-    const isDrilling = drillingCodes.has(a.code)
     return {
       rig: rep ? displayRig(rigById.get(rep.rig_id)?.name) : '(unknown)',
       date: rep?.report_date || null,
@@ -74,10 +66,8 @@ async function _loadReports(start, end) {
       description: cm?.description || `Code ${a.code}`,
       category: cm?.category || null,
       isNpt: nptCodes.has(a.code),
-      isDrilling,
       isEquipment: equipCodes.has(a.code),
       hrs: a.hrs || 0,
-      meterage: isDrilling ? drillMeterageOf(a) : 0,
       remark: a.remarks || null,
     }
   })

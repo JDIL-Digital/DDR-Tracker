@@ -5,7 +5,6 @@ import { todayISO, prettyDate, shiftDate } from './format'
 import { LoadError } from './LoadState'
 import ReportPeriodSelector from './ReportPeriodSelector'
 import RigCompareChips from './RigCompareChips'
-import RopTrendChart from './RopTrendChart'
 import TimeByCodePanel from './TimeByCodePanel'
 import NptReportPanel from './NptReportPanel'
 import EquipmentDowntimePanel from './EquipmentDowntimePanel'
@@ -66,18 +65,6 @@ export default function ReportsView() {
     const acts = data.acts.filter((a) => sel.has(a.rig))
     const reps = data.reps.filter((r) => sel.has(r.rig))
 
-    // ROP trend — per date: drilling meterage / drilling hours
-    const byDate = new Map()
-    for (const a of acts) {
-      if (!a.isDrilling || !a.date) continue
-      const e = byDate.get(a.date) || { m: 0, h: 0 }
-      e.m += a.meterage; e.h += a.hrs
-      byDate.set(a.date, e)
-    }
-    const ropTrend = [...byDate.entries()]
-      .map(([date, e]) => ({ date, rop: e.h > 0 && e.m > 0 ? e.m / e.h : null }))
-      .sort((a, b) => a.date.localeCompare(b.date))
-
     // Time by code
     const codeMap = new Map()
     let totalHours = 0
@@ -127,7 +114,7 @@ export default function ReportsView() {
     const avgDailyKl = fuelSeen && fuelByDate.size > 0 ? totalFuel / fuelByDate.size : null
     const avgLhr = fuelSeen && fuelHours > 0 ? (totalFuel * 1000) / fuelHours : null
 
-    return { ropTrend, timeByCode, totalHours, nptHours, nptPct, byCause, byRigNpt, dtEvents, dtByRig, fuelTrend, avgDailyKl, avgLhr }
+    return { timeByCode, totalHours, nptHours, nptPct, byCause, byRigNpt, dtEvents, dtByRig, fuelTrend, avgDailyKl, avgLhr }
   }, [data, sel])
 
   if (!isSupabaseConfigured) {
@@ -168,7 +155,6 @@ export default function ReportsView() {
         <div className="state">Loading report…</div>
       ) : (
         <div className="stack report-stack">
-          <RopTrendChart points={view.ropTrend} />
           <TimeByCodePanel rows={view.timeByCode} total={view.totalHours} />
           <NptReportPanel
             nptHours={view.nptHours}
