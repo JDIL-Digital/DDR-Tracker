@@ -2,10 +2,10 @@
 // a date picker (populated from the real DDR report_dates) + five fleet-total
 // KPI cards for the selected date. Per-rig cards (B), downtime chart (C), and
 // NPT-by-cause (D) are built in later sections.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
-import { loadDdrDates, loadFleetTotals, loadRigCards, loadDowntimeByRig, loadNptByCause } from './ddrFleet'
-import { fmt1, prettyDate, DASH } from './format'
+import { loadDdrDates, loadFleetTotals, loadRigCards, loadRigTimeDistribution, loadNptByCause } from './ddrFleet'
+import { fmt1, prettyDate, todayISO, shiftDate, DASH } from './format'
 import { LoadError } from './LoadState'
 
 const KPIS = [
@@ -21,8 +21,13 @@ export default function FleetView() {
   const [date, setDate] = useState('')        // selected date
   const [totals, setTotals] = useState(null)  // fleet totals for the date
   const [cards, setCards] = useState(null)    // per-rig cards for the date
-  const [downtime, setDowntime] = useState(null) // cumulative RODR/NODR/EBDR per rig (current well)
   const [npt, setNpt] = useState(null)         // NPT-by-cause per rig for the date
+  // Section C — rig time distribution has its OWN date range (independent of the
+  // tab's single-date picker, which still drives KPIs/cards/NPT). Default: last 7 days.
+  const [distFrom, setDistFrom] = useState(shiftDate(todayISO(), -7))
+  const [distTo, setDistTo] = useState(todayISO())
+  const [dist, setDist] = useState(null)       // rig time distribution over [distFrom, distTo]
+  const [distLoading, setDistLoading] = useState(false)
   const [err, setErr] = useState(null)
   const [loadingTotals, setLoadingTotals] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -42,13 +47,25 @@ export default function FleetView() {
   useEffect(() => {
     if (!date) return
     let cancelled = false
-    setLoadingTotals(true); setErr(null); setCards(null); setDowntime(null); setNpt(null)
-    Promise.all([loadFleetTotals(date), loadRigCards(date), loadDowntimeByRig(date), loadNptByCause(date)])
-      .then(([t, c, d, n]) => { if (!cancelled) { setTotals(t); setCards(c); setDowntime(d); setNpt(n) } })
+    setLoadingTotals(true); setErr(null); setCards(null); setNpt(null)
+    Promise.all([loadFleetTotals(date), loadRigCards(date), loadNptByCause(date)])
+      .then(([t, c, n]) => { if (!cancelled) { setTotals(t); setCards(c); setNpt(n) } })
       .catch((e) => { if (!cancelled) setErr(e.message) })
       .finally(() => { if (!cancelled) setLoadingTotals(false) })
     return () => { cancelled = true }
   }, [date])
+
+  // Section C loads INDEPENDENTLY on its own From/To range (not the tab's date).
+  useEffect(() => {
+    if (!distFrom || !distTo) return
+    let cancelled = false
+    setDistLoading(true)
+    loadRigTimeDistribution(distFrom, distTo)
+      .then((d) => { if (!cancelled) setDist(d) })
+      .catch((e) => { if (!cancelled) setErr(e.message) })
+      .finally(() => { if (!cancelled) setDistLoading(false) })
+    return () => { cancelled = true }
+  }, [distFrom, distTo, reloadKey])
 
   const values = useMemo(() => {
     if (!totals) return null
@@ -112,8 +129,15 @@ export default function FleetView() {
         </div>
       )}
 
-      {/* Section C — cumulative RODR/NODR/EBDR per rig (current well) */}
-      {downtime && <DowntimeByRig data={downtime} date={date} />}
+      {/* Section C — rig time distribution (RODR/NODR/EBDR) over its own date range */}
+      <RigTimeDistribution
+        data={dist}
+        from={distFrom}
+        to={distTo}
+        onFrom={setDistFrom}
+        onTo={setDistTo}
+        loading={distLoading}
+      />
 
       {/* Section D — NPT by cause per rig (selected date) */}
       {npt && <NptByCauseD data={npt} date={date} />}
@@ -169,22 +193,33 @@ const CONDS = [
 ]
 const shortRig = (name) => String(name).replace(/^Jindal\s+/i, '').replace(/-1$/, '')
 
-// Grouped bar chart: per rig with a DDR on the date, three bars = cumulative
-// RODR/NODR/EBDR hours over the rig's current well, up to the date.
-function DowntimeByRig({ data, date }) {
-  const rows = (data.rigs || []).filter((r) => r.hasData)
+// Grouped bar chart: per rig with a DDR in the range, three bars = cumulative
+// RODR/NODR/EBDR hours over the selected From/To range (all wells, no reset).
+// Own date-range controls (independent of the tab's single-date picker). A rig
+// with unmapped-code hours in the range shows a small "pending code mapping" note
+// so its total isn't silently short.
+function RigTimeDistribution({ data, from, to, onFrom, onTo, loading }) {
+  const rows = data?.rigs || []
   const max = Math.max(1, ...rows.flatMap((r) => [r.hours.RODR, r.hours.NODR, r.hours.EBDR]))
   return (
     <div className="panel">
       <div className="sec-h" style={{ margin: '0 0 4px' }}>
-        <h3>Downtime per rig — cumulative by well</h3>
+        <h3>Rig time distribution (RODR / NODR / EBDR) · {prettyDate(from)} → {prettyDate(to)}</h3>
         <div className="dt-legend">
           {CONDS.map((c) => <span key={c.key} className="dt-leg"><span className="dt-swatch" style={{ background: c.color }} />{c.label}</span>)}
         </div>
       </div>
-      <div className="psub">Cumulative RODR / NODR / EBDR hours over each rig's current well, up to {prettyDate(date)}</div>
-      {!data.hasData ? (
-        <div className="npt-empty">No rig filed a DDR for this date — no cumulative downtime to show.</div>
+      <div className="psub">Cumulative operating (RODR) / non-operating (NODR) / break-down (EBDR) hours per rig over the selected range · all wells</div>
+
+      <div className="dt-range no-print">
+        <label className="dt-field"><span>From</span><input type="date" value={from} max={to} onChange={(e) => onFrom(e.target.value)} /></label>
+        <label className="dt-field"><span>To</span><input type="date" value={to} min={from} onChange={(e) => onTo(e.target.value)} /></label>
+      </div>
+
+      {loading ? (
+        <div className="state">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="npt-empty">No rig filed a DDR in this range.</div>
       ) : (
         <div className="dt-chart">
           {rows.map((r) => (
@@ -201,7 +236,12 @@ function DowntimeByRig({ data, date }) {
                 })}
               </div>
               <div className="dt-label">{shortRig(r.rig)}</div>
-              <div className="dt-well" title={r.well || ''}>{r.well || DASH}</div>
+              <div className="dt-well">{r.days} {r.days === 1 ? 'day' : 'days'}</div>
+              {r.nullCodeHrs > 0 && (
+                <div className="dt-nullnote" title="Activity hours whose code has no IADC condition (unmapped) — not counted in RODR/NODR/EBDR">
+                  +{fmt1(r.nullCodeHrs)}h pending code mapping
+                </div>
+              )}
             </div>
           ))}
         </div>

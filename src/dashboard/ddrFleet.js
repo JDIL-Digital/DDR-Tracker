@@ -79,51 +79,46 @@ async function fetchActivities(reportIds) {
   return all
 }
 
-const normWell = (s) => String(s ?? '').trim().toLowerCase()
-
-// Section C — cumulative RODR/NODR/EBDR hours PER RIG for the rig's CURRENT well,
-// accumulated up to the selected date (resets on a new well). The "current well"
-// is the well_no on the rig's DDR for the selected date; only rigs that filed a
-// DDR that date get a bar. Hours = sum of that rig's activity hours (by
-// code_master.condition) across ALL its DDRs for that well with report_date <= date.
-export async function loadDowntimeByRig(date) {
+// Section C — RIG TIME DISTRIBUTION: cumulative RODR/NODR/EBDR activity hours per
+// rig across ALL its DDRs whose report_date is within [from, to] (both bounds
+// inclusive), regardless of well changes (NO per-well reset — a rig that changed
+// wells still shows its full hours for the period). Returns per-rig `days` (DDRs
+// in range) and `nullCodeHrs` (activity hours whose code has no IADC condition —
+// e.g. an unmapped bare code — surfaced so the bar total isn't silently short;
+// MDR/rig-move hours are excluded from this RODR/NODR/EBDR view). Only rigs with a
+// DDR in the range get a bar.
+export async function loadRigTimeDistribution(from, to) {
   if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
-  if (!date) return { rigs: [], hasData: false }
+  if (!from || !to) return { rigs: [], hasData: false, from, to }
 
   const [rigsRes, codesRes, repRes] = await Promise.all([
     supabase.from('rigs').select('id, name, sort_order'),
     supabase.from('code_master').select('code, condition'),
-    supabase.from('reports').select('id, rig_id, report_date, well_no').lte('report_date', date),
+    supabase.from('reports').select('id, rig_id, report_date').gte('report_date', from).lte('report_date', to),
   ])
   for (const r of [rigsRes, codesRes, repRes]) if (r.error) throw new Error(r.error.message)
 
   const condByCode = new Map((codesRes.data || []).map((c) => [c.code, c.condition]))
   const reports = repRes.data || []
+  const reportRig = new Map(reports.map((r) => [r.id, r.rig_id]))
 
-  // Current well per rig = well_no on the selected date's report.
-  const currentWell = new Map()
-  for (const r of reports) if (r.report_date === date) currentWell.set(r.rig_id, r.well_no ?? null)
-
-  // Reports for each rig's current well, up to the date.
-  const reportRig = new Map()
-  const relevantIds = []
+  // Distinct report_dates per rig within the range (= days that rig reported).
+  const daysByRig = new Map()
   for (const r of reports) {
-    if (!currentWell.has(r.rig_id)) continue
-    if (normWell(r.well_no) === normWell(currentWell.get(r.rig_id))) {
-      relevantIds.push(r.id)
-      reportRig.set(r.id, r.rig_id)
-    }
+    if (!daysByRig.has(r.rig_id)) daysByRig.set(r.rig_id, new Set())
+    daysByRig.get(r.rig_id).add(r.report_date)
   }
 
-  const acts = await fetchActivities(relevantIds)
+  const acts = await fetchActivities(reports.map((r) => r.id))
   const perRig = new Map()
   for (const a of acts) {
     const rigId = reportRig.get(a.report_id)
     if (!rigId) continue
+    const e = perRig.get(rigId) || { RODR: 0, NODR: 0, EBDR: 0, nullCodeHrs: 0 }
     const cond = condByCode.get(a.code)
-    if (!cond) continue
-    const e = perRig.get(rigId) || { RODR: 0, NODR: 0, EBDR: 0 }
-    if (cond in e) e[cond] += Number(a.hrs) || 0
+    if (cond === 'RODR' || cond === 'NODR' || cond === 'EBDR') e[cond] += Number(a.hrs) || 0
+    else if (cond === 'MDR') { /* rig-move — not part of the RODR/NODR/EBDR distribution */ }
+    else e.nullCodeHrs += Number(a.hrs) || 0 // code null / no condition → surfaced, never dropped
     perRig.set(rigId, e)
   }
 
@@ -131,11 +126,18 @@ export async function loadDowntimeByRig(date) {
     .slice()
     .sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999) || String(a.name).localeCompare(String(b.name)))
 
-  const rows = ordered.map((rig) => {
-    if (!currentWell.has(rig.id)) return { rig: rig.name, hasData: false }
-    return { rig: rig.name, well: currentWell.get(rig.id), hasData: true, hours: perRig.get(rig.id) || { RODR: 0, NODR: 0, EBDR: 0 } }
-  })
-  return { rigs: rows, hasData: rows.some((r) => r.hasData) }
+  const rows = ordered
+    .filter((rig) => daysByRig.has(rig.id)) // only rigs that filed a DDR in the range
+    .map((rig) => {
+      const e = perRig.get(rig.id) || { RODR: 0, NODR: 0, EBDR: 0, nullCodeHrs: 0 }
+      return {
+        rig: rig.name,
+        days: daysByRig.get(rig.id).size,
+        hours: { RODR: e.RODR, NODR: e.NODR, EBDR: e.EBDR },
+        nullCodeHrs: e.nullCodeHrs,
+      }
+    })
+  return { rigs: rows, hasData: rows.length > 0, from, to }
 }
 
 // Section D — NPT (non-productive time) by cause, per rig, for the selected date.
