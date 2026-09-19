@@ -310,6 +310,13 @@ code changes require re-publishing the JDIL DMR Scheduler deployment to take eff
    `is_npt`), and relabel any EBDR-only display as "Equipment Breakdown". Settle the still-open
    **MDR-as-NPT** question at the same time (current assumption: NPT = NODR+EBDR, **MDR excluded** —
    pending Jindal team). See docs/integration-test-flow2-findings.md. Do NOT implement mid-integration-test.
+0b. **MAINTENANCE "CRITICAL ALERTS" SUMMARY CARD (Flow-2 Checkpoint 2.3 finding F2-2, 2026-09-19) —
+   ENHANCEMENT, deferred.** The Maintenance tab has no aggregate critical-alerts card; criticals show
+   as per-department red banners (⚠ Critical) + Analytics-table counts, which work and are accurate
+   (detection is correct — not a data bug). DECISION: per-department banners are sufficient for now;
+   ADD an aggregate rig-level "Critical Alerts" summary card (top-of-tab, total critical count for the
+   selected rig/DMR, red when >0 / calm-green when 0) as an enhancement that COMPLEMENTS the banners.
+   Implement as a separate change after the integration test. See docs/integration-test-flow2-findings.md (F2-2).
 1. DPR/drilling-side ingest (MDPR/EDPR) — NOT started; drilling reports aren't arriving yet. Real
    format observed: subject "<RIG> MDPR/EDPR <DD-MM-YYYY>" from ro.<rig>@jindalmumbai.com, twice
    daily (morning + evening), Excel attachments. Build the drilling counterpart to the DMR pipeline

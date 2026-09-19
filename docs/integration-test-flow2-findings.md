@@ -51,3 +51,37 @@ This was the only cross-tab inconsistency.
 ### Cross-references
 - CLAUDE.md → NEXT STEPS item 0 (NPT DEFINITION RECONCILIATION).
 - CLAUDE.md → STANDING TODO "MDR-as-NPT (OPEN QUESTION)" and §6.2 NEXT STEPS ("reconcile the NPT views").
+
+---
+
+## Finding F2-2 — Maintenance tab has no aggregate "Critical Alerts" summary card
+
+**Checkpoint:** 2.3 (Maintenance dashboard — DMR data) · **Logged:** 2026-09-19 · **Severity:** low
+(UI presentation, not a data bug) · **Status:** DECIDED (enhancement), implementation deferred to
+after the integration test.
+
+### What was found
+The Maintenance tab has **no aggregate "Critical Alerts" summary card**. Criticals currently surface
+as **per-department red banners** (`⚠ Critical`) on the Overview/Department cards, plus critical /
+notable **count columns in the Analytics table**. These work correctly and are accurate — the
+critical/notable keyword detection (`maintenanceKeywords.js`) matched the real activity text
+correctly (e.g. Virtue-1 Sep-19: 0 critical → calm, 4 notable → amber banners). This is a
+**presentation observation, not a data bug.** (Confirmed by code search: no `Critical Alerts` card /
+aggregate critical-count component exists.)
+
+### Decision
+- The **per-department banners are sufficient for now** — they show *which* department has the
+  critical, which is the actionable detail.
+- **Enhancement (separate change, after the integration test):** add an aggregate **rig-level
+  "Critical Alerts" summary card** — a top-of-tab indicator showing the total critical count for the
+  selected rig/DMR: **red when > 0, calm/green when 0**. It **complements, not replaces**, the
+  per-department banners.
+
+### To implement (deferred)
+1. Add a top-of-tab summary card in `MaintenanceView.jsx` that counts `tier === 'critical'` across
+   the selected scope (respecting the This report / Overall toggle), red when > 0 else calm/green.
+2. Optionally make it clickable to drill into the critical items (like the KPI cards).
+3. Keep the per-department `⚠ Critical` banners as-is.
+
+### Cross-references
+- CLAUDE.md → NEXT STEPS item 0b (Maintenance Critical Alerts summary card).
