@@ -4,6 +4,19 @@ _Handoff notes so a future Claude Code session can continue this project. Last u
 (OPEX feature stages 1/2a/2b-1; DMR cron reschedule + cost-verify; Maintenance dashboard redesign;
 JDIL ORBIT branding + favicon)._
 
+## INTEGRATION TEST PROGRESS (as of 2026-09-19)
+- **Flow 1 (DDR pipeline: Email → Match → Store → Extract → Save → Dashboard, + scheduler +
+  idempotency): ✅ COMPLETE — 6/6 checkpoints PASS.** See docs/integration-test-flow1.md.
+- **Flow 2 (Dashboards read the data: Fleet, Reports, Maintenance/DMR, OPEX): ✅ COMPLETE — 4/4
+  checkpoints PASS.** 2 findings logged (F2-1 NPT definition reconciliation; F2-2 Maintenance
+  Critical Alerts summary card) — both decisions/enhancements, not data bugs, to implement AFTER the
+  integration test. See docs/integration-test-flow2-findings.md.
+- **Flow 3 = NEXT (not yet done):** well-plan **Extract** (the extract-worker button end-to-end),
+  the **DMR ingestion pipeline** end-to-end, and the **Extract worker** deploy. (well-plan/OPEX
+  reading-from-DB and the F2-1/F2-2 fixes remain follow-ups.)
+- **OPEX data:** the 6,046 `purchase_orders` rows are the REAL PO dataset (4,635 local + 1,411
+  import) — intentionally KEPT, not test data, do not clear.
+
 ## 1. What this project is
 **DDR Tracker** is an internal tool for **Jindal Drilling & Industries Ltd.** It standardizes
 **daily drilling reports (DDRs)** from **6 offshore rigs**. Reports arrive as Excel attachments by

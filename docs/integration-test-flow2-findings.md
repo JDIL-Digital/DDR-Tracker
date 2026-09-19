@@ -1,8 +1,29 @@
 # DDR Pipeline — Flow 2 Integration Test: Findings & Decisions
 
-Companion to `docs/integration-test-flow1.md`. Flow 2 = the dashboards (Fleet + Reports tabs) reading
-the saved DDR data. This file logs findings that need a follow-up decision or change; checkpoint
-PASS/FAIL verdicts live in the running test record.
+Companion to `docs/integration-test-flow1.md`. Flow 2 = the dashboards (Fleet, Reports, Maintenance,
+OPEX) reading the saved data. This file logs findings that need a follow-up decision or change;
+checkpoint PASS/FAIL verdicts are summarized below.
+
+---
+
+## Flow 2 — RESULT: ✅ COMPLETE (all 4 checkpoints PASS)
+
+**Date completed:** 2026-09-19.
+
+| Checkpoint | What was verified | Verdict |
+|---|---|---|
+| 2.1 Fleet dashboard | `loadDdrDates`, `loadFleetTotals`, `loadRigCards`, `loadRigTimeDistribution` (default last-7-days = 168h), `loadDailyActivitySummary` — all numbers equal the DB; honest empty states (Pioneer); cross-dashboard reconciliation. | ✅ PASS |
+| 2.2 Reports panels | Time-by-Code (Σ=100%), NPT report, Equipment downtime, Fuel consumption — all equal the DB and reconcile internally (Time-by-Code total = NPT total = Σ report hours; fuel = raw sum). | ✅ PASS + **F2-1** |
+| 2.3 Maintenance / DMR | Rig+date pickers, KPIs (This report / Overall — incl. a >1000-activity Overall proving the pagination fix), department cards + chiefs, keyword tiers, drill-downs — all equal the DB; Pioneer honest empty. | ✅ PASS + **F2-2** |
+| 2.4 OPEX | `purchase_orders` (6,046 rows = 4,635 local + 1,411 import) with correct source/location/vendor/amount/gst/currency + line_key/occurrence_index; dedup upsert-by-line_key intact (6,046 unique keys, 0 dupes); tab loads inside the authenticated shell with a shell-gated Save-to-ORBIT path. | ✅ PASS |
+
+**Findings logged for later (post-integration-test):** F2-1 (NPT definition reconciliation) and
+F2-2 (Maintenance Critical Alerts summary card) — see below. Both are decisions/enhancements, not
+data bugs.
+
+**OPEX data note:** the **6,046 `purchase_orders` rows are intentionally KEPT** — they are the real
+PO dataset (4,635 local INR + 1,411 import multi-currency), not throwaway test data. Not to be
+cleared. (OPEX display is still upload-based; reading FROM the DB is the not-yet-built Stage 2b-2.)
 
 ---
 
