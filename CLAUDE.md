@@ -299,6 +299,17 @@ code changes require re-publishing the JDIL DMR Scheduler deployment to take eff
   in Google Cloud if not already.
 
 ## NEXT STEPS (in order)
+0. **NPT DEFINITION RECONCILIATION (Flow-2 Checkpoint 2.2 finding, 2026-09-19) — DECIDED, not yet
+   implemented.** NPT is currently inconsistent across tabs: the **Reports** NPT panel uses
+   `code_master.is_npt` = **EBDR-only** (showed 0.1% for Sep-12→18), while the **Fleet** tab
+   (`loadNptByCause`) uses **NODR+EBDR** (showed 32% for the same data). Both internally correct, but
+   management sees two different "NPT" numbers. **DECISION: NPT = NODR + EBDR everywhere** (industry
+   standard for non-productive time); the EBDR-only figure stays as a valid sub-metric but must be
+   **relabeled "Equipment Breakdown", not "NPT"**. To implement (a SEPARATE change, after the
+   integration test): align the Reports NPT panel to NODR+EBDR (adjust how the panel computes NPT, or
+   `is_npt`), and relabel any EBDR-only display as "Equipment Breakdown". Settle the still-open
+   **MDR-as-NPT** question at the same time (current assumption: NPT = NODR+EBDR, **MDR excluded** —
+   pending Jindal team). See docs/integration-test-flow2-findings.md. Do NOT implement mid-integration-test.
 1. DPR/drilling-side ingest (MDPR/EDPR) — NOT started; drilling reports aren't arriving yet. Real
    format observed: subject "<RIG> MDPR/EDPR <DD-MM-YYYY>" from ro.<rig>@jindalmumbai.com, twice
    daily (morning + evening), Excel attachments. Build the drilling counterpart to the DMR pipeline
