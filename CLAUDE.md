@@ -4,16 +4,24 @@ _Handoff notes so a future Claude Code session can continue this project. Last u
 (OPEX feature stages 1/2a/2b-1; DMR cron reschedule + cost-verify; Maintenance dashboard redesign;
 JDIL ORBIT branding + favicon)._
 
-## INTEGRATION TEST PROGRESS (as of 2026-09-19)
+## INTEGRATION TEST PROGRESS (COMPLETE as of 2026-09-19 — all 3 flows PASS)
 - **Flow 1 (DDR pipeline: Email → Match → Store → Extract → Save → Dashboard, + scheduler +
   idempotency): ✅ COMPLETE — 6/6 checkpoints PASS.** See docs/integration-test-flow1.md.
 - **Flow 2 (Dashboards read the data: Fleet, Reports, Maintenance/DMR, OPEX): ✅ COMPLETE — 4/4
   checkpoints PASS.** 2 findings logged (F2-1 NPT definition reconciliation; F2-2 Maintenance
   Critical Alerts summary card) — both decisions/enhancements, not data bugs, to implement AFTER the
   integration test. See docs/integration-test-flow2-findings.md.
-- **Flow 3 = NEXT (not yet done):** well-plan **Extract** (the extract-worker button end-to-end),
-  the **DMR ingestion pipeline** end-to-end, and the **Extract worker** deploy. (well-plan/OPEX
-  reading-from-DB and the F2-1/F2-2 fixes remain follow-ups.)
+- **Flow 3 (Ancillary pipelines: DMR ingestion end-to-end + well-plan Extract worker): ✅ COMPLETE —
+  2/2 checkpoints PASS** (both DB-confirmed). DMR pipeline correct/safe/autonomous (match+guards →
+  store → extract → save, idempotent, 7:30/8:30/9:30 cron); well-plan Extract works end-to-end
+  (button → auth-gated worker reusing the extractor, markFailed-safe → saved, all 4 plans extracted
+  with reconciling data). See docs/integration-test-flow3.md.
+- **➡️ ALL THREE INTEGRATION-TEST FLOWS COMPLETE.** Remaining = the logged follow-ups: F2-1 (NPT =
+  NODR+EBDR everywhere + relabel EBDR-only), F2-2 (Maintenance Critical Alerts card), and the minor
+  IN#2Z well_name tidy (below).
+- **Minor open item (one-field tidy, not a pipeline fault):** the Discovery **IN#2Z** DWOP saved
+  `well_name = "IN#1Z"` (should be **IN#2Z**) — correct that one `well_plans` field; the rest of the
+  plan's data is correct. See docs/integration-test-flow3.md.
 - **OPEX data:** the 6,046 `purchase_orders` rows are the REAL PO dataset (4,635 local + 1,411
   import) — intentionally KEPT, not test data, do not clear.
 
