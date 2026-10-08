@@ -1,19 +1,24 @@
+// Analytics tab — SINGLE-RIG view. One rig at a time (dropdown, default = first by
+// sort_order) over a chosen time window (24H / 7D / 30D / Custom). Panels show the
+// selected rig's trends over the window:
+//   • Diesel consumption (FuelConsumptionPanel, reused)
+//   • Rig time distribution RODR/NODR/EBDR per day (RigTimeDistributionDaily)
+//   • Well & Location (WellLocationPanel, from the latest DDR in the window)
+//   • Portable Water  — placeholder (coming next)
+//   • Planned vs Actual — placeholder (coming next)
+// Every panel is wrapped in <Expandable> (click to enlarge). READ-ONLY; nothing is
+// invented — absent data shows honest empty states.
 import { useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
-import { loadAnalytics } from './analytics'
+import { loadRigsForPicker } from './settings'
+import { loadRigTimeDistributionDaily, loadRigFuelDaily, loadRigWellLocation } from './ddrFleet'
 import { todayISO, prettyDate, shiftDate } from './format'
 import { LoadError } from './LoadState'
 import TimeWindowSelector from './TimeWindowSelector'
-import RigCompareChips from './RigCompareChips'
-import ILTTrendChart from './ILTTrendChart'
-import NptByCausePanel from './NptByCausePanel'
-import DepthVsDaysChart from './DepthVsDaysChart'
-import FleetPerformanceMatrix from './FleetPerformanceMatrix'
+import Expandable from './Expandable'
+import FuelConsumptionPanel from './FuelConsumptionPanel'
+import RigTimeDistributionDaily from './RigTimeDistributionDaily'
 import WellLocationPanel from './WellLocationPanel'
-
-// Stable per-rig line colors (assigned by roster position so a rig keeps its
-// color regardless of which rigs are selected).
-const RIG_COLORS = ['#1fb55e', '#3e8fe0', '#e7a53c', '#f04a42', '#7b3ff2', '#17a2a2', '#d81b8c', '#8a95a1']
 
 function computeRange(mode, cs, ce) {
   const end = mode === 'custom' ? ce : todayISO()
@@ -26,55 +31,44 @@ function computeRange(mode, cs, ce) {
 }
 
 export default function AnalyticsView() {
-  const [mode, setMode] = useState('30d') // default 30D so the sparse sample data is visible
+  const [mode, setMode] = useState('30d') // default 30D so sparse sample data is visible
   const [customStart, setCustomStart] = useState(shiftDate(todayISO(), -30))
   const [customEnd, setCustomEnd] = useState(todayISO())
-  const [data, setData] = useState(null)
+  const [rigs, setRigs] = useState([])
+  const [rigId, setRigId] = useState('')
+  const [data, setData] = useState(null) // { fuel, dist, well }
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
   const retry = () => setReloadKey((k) => k + 1)
-  const [selected, setSelected] = useState(null) // Set<name> | null (null → all)
 
   const range = useMemo(() => computeRange(mode, customStart, customEnd), [mode, customStart, customEnd])
 
+  // Load the rig list once; default to the first rig (sort_order).
   useEffect(() => {
+    loadRigsForPicker()
+      .then((r) => { setRigs(r); setRigId((cur) => cur || (r[0]?.id ?? '')) })
+      .catch((e) => setError(e.message))
+  }, [])
+
+  // Reload the selected rig's data whenever rig / window changes.
+  useEffect(() => {
+    if (!rigId) return
     let cancelled = false
     setLoading(true)
     setError(null)
-    loadAnalytics(range.start, range.end)
-      .then((d) => { if (!cancelled) setData(d) })
+    Promise.all([
+      loadRigFuelDaily(rigId, range.start, range.end),
+      loadRigTimeDistributionDaily(rigId, range.start, range.end),
+      loadRigWellLocation(rigId, range.start, range.end),
+    ])
+      .then(([fuel, dist, well]) => { if (!cancelled) setData({ fuel, dist, well }) })
       .catch((e) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [range.start, range.end, reloadKey])
+  }, [rigId, range.start, range.end, reloadKey])
 
-  // Initialize the compare selection to all rigs once, on first data load.
-  useEffect(() => {
-    if (data && selected === null) setSelected(new Set(data.rigs.map((r) => r.name)))
-  }, [data, selected])
-
-  const allNames = data ? data.rigs.map((r) => r.name) : []
-  const sel = selected ?? new Set(allNames)
-  const shown = data ? data.rigs.filter((r) => sel.has(r.name)) : []
-
-  const toggle = (name) =>
-    setSelected((prev) => {
-      const base = prev ?? new Set(allNames)
-      const next = new Set(base)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
-      return next
-    })
-
-  // Derived views over the selected rigs
-  const colorOf = (name) => RIG_COLORS[Math.max(0, allNames.indexOf(name)) % RIG_COLORS.length]
-  const iltSeries = shown.map((r) => ({ name: r.name, color: colorOf(r.name), points: r.iltSeries || [] }))
-
-  const nptMap = new Map()
-  for (const r of shown) for (const c of r.nptCauses || []) nptMap.set(c.label, (nptMap.get(c.label) || 0) + c.hours)
-  const nptItems = [...nptMap.entries()].map(([label, hours]) => ({ label, hours })).sort((a, b) => b.hours - a.hours)
-  const nptTotal = nptItems.reduce((s, i) => s + i.hours, 0)
+  const rigName = rigs.find((r) => r.id === rigId)?.name || 'Selected rig'
 
   if (!isSupabaseConfigured) {
     return (
@@ -88,13 +82,20 @@ export default function AnalyticsView() {
   }
 
   return (
-    <div className="wrap">
+    <div className="wrap analytics-wrap">
       <div className="sec-h">
-        <h2>Analytics — {prettyDate(range.start)} → {prettyDate(range.end)}</h2>
-        <span className="hint">{loading ? 'Loading…' : 'Aggregated from submitted DDRs'}</span>
+        <h2>Analytics — {rigName} · {prettyDate(range.start)} → {prettyDate(range.end)}</h2>
+        <span className="hint">{loading ? 'Loading…' : 'Per-rig trends from submitted DDRs'}</span>
       </div>
 
       <div className="analytics-controls">
+        <label className="das-field">
+          <span>Rig</span>
+          <select value={rigId} onChange={(e) => setRigId(e.target.value)}>
+            {rigs.length === 0 && <option value="">—</option>}
+            {rigs.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </label>
         <TimeWindowSelector
           mode={mode}
           onMode={setMode}
@@ -102,25 +103,54 @@ export default function AnalyticsView() {
           customEnd={customEnd}
           onCustom={(s, e) => { setCustomStart(s); setCustomEnd(e) }}
         />
-        <RigCompareChips all={allNames} selected={sel} onToggle={toggle} />
       </div>
 
       {error ? (
         <LoadError message={error} onRetry={retry} />
-      ) : !data ? (
-        <div className="state">Loading analytics…</div>
       ) : (
-        <>
-          <div className="bottom">
-            <ILTTrendChart series={iltSeries} />
-            <NptByCausePanel total={nptTotal} items={nptItems} />
-          </div>
-          <div className="stack">
-            <DepthVsDaysChart rigs={data.rigs} />
-            <FleetPerformanceMatrix rows={shown} />
-            <WellLocationPanel rigs={shown.map((r) => r.name)} />
-          </div>
-        </>
+        // 3-per-row grid (collapses to 2 then 1 as the viewport narrows).
+        // Order L→R, top→bottom:
+        //   Row 1: Planned vs Actual | Rig Time Distribution | Diesel Consumption
+        //   Row 2: Portable Water    | Well & Location       | (empty 6th cell)
+        <div className="analytics-grid">
+          <Expandable>
+            <div className="panel accent soon-panel" style={{ '--k': 'var(--amber)' }}>
+              <h3>Planned vs Actual</h3>
+              <div className="psub">Depth vs days — planned curve vs DPR actuals</div>
+              <div className="soon-badge">Coming next</div>
+            </div>
+          </Expandable>
+
+          <Expandable>
+            <RigTimeDistributionDaily
+              days={data?.dist?.days ?? []}
+              hasData={data?.dist?.hasData ?? false}
+            />
+          </Expandable>
+
+          <Expandable>
+            <FuelConsumptionPanel
+              avgDailyKl={data?.fuel?.avgDailyKl ?? null}
+              avgLhr={data?.fuel?.avgLhr ?? null}
+              trend={data?.fuel?.trend ?? []}
+            />
+          </Expandable>
+
+          <Expandable>
+            <div className="panel accent soon-panel" style={{ '--k': 'var(--blue)' }}>
+              <h3>Portable Water</h3>
+              <div className="psub">Made vs consumed per day · single rig</div>
+              <div className="soon-badge">Coming next</div>
+            </div>
+          </Expandable>
+
+          <Expandable>
+            <WellLocationPanel rigName={rigName} data={data?.well} loading={loading} />
+          </Expandable>
+
+          {/* 6th cell reserved — kept empty for now so the 2×3 grid stays complete. */}
+          <div className="analytics-cell-empty" aria-hidden="true" />
+        </div>
       )}
     </div>
   )

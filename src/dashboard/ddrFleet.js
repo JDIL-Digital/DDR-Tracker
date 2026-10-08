@@ -238,3 +238,117 @@ export async function loadRigCards(date) {
     }
   })
 }
+
+// ---------------------------------------------------------------------------
+// Analytics tab (SINGLE-RIG) loaders. These are deliberately separate from the
+// Fleet loaders above — loadRigTimeDistribution (Fleet, all rigs, range-cumulative)
+// is left untouched; the ones below are scoped to ONE rig and are PER DAY.
+// ---------------------------------------------------------------------------
+
+// RIG TIME DISTRIBUTION per DAY for ONE rig over [from, to] inclusive. For each of
+// the rig's DDR report_dates, sums activities.hrs grouped by code_master.condition:
+// RODR / NODR / EBDR. MDR (rig-move) is EXCLUDED; activity hours whose code has no
+// condition (unmapped bare code) are surfaced as nullCodeHrs so a day's bar is never
+// silently short. A reporting day with zero hours still appears (empty bar).
+export async function loadRigTimeDistributionDaily(rigId, from, to) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId || !from || !to) return { days: [], hasData: false, from, to }
+
+  const [codesRes, repRes] = await Promise.all([
+    supabase.from('code_master').select('code, condition'),
+    supabase.from('reports').select('id, report_date')
+      .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to),
+  ])
+  for (const r of [codesRes, repRes]) if (r.error) throw new Error(r.error.message)
+
+  const condByCode = new Map((codesRes.data || []).map((c) => [c.code, c.condition]))
+  const reports = repRes.data || []
+  const dateByReport = new Map(reports.map((r) => [r.id, r.report_date]))
+
+  const byDate = new Map()
+  const ensure = (d) => {
+    if (!byDate.has(d)) byDate.set(d, { date: d, RODR: 0, NODR: 0, EBDR: 0, nullCodeHrs: 0 })
+    return byDate.get(d)
+  }
+  // Seed every reporting day so a day with no classifiable hours still shows.
+  for (const r of reports) ensure(r.report_date)
+
+  const acts = await fetchActivities(reports.map((r) => r.id))
+  for (const a of acts) {
+    const d = dateByReport.get(a.report_id)
+    if (!d) continue
+    const e = ensure(d)
+    const cond = condByCode.get(a.code)
+    if (cond === 'RODR' || cond === 'NODR' || cond === 'EBDR') e[cond] += Number(a.hrs) || 0
+    else if (cond === 'MDR') { /* rig-move — excluded from the RODR/NODR/EBDR distribution */ }
+    else e.nullCodeHrs += Number(a.hrs) || 0 // code null / no condition → surfaced, never dropped
+  }
+
+  const days = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+  return { days, hasData: days.length > 0, from, to }
+}
+
+// Daily diesel/HSD consumption for ONE rig over [from, to]. Returns a per-day trend
+// (KL from reports.fuel_consumed_kl), the average daily burn (KL/day over the days
+// that reported fuel), and the average rate (L/hr = total fuel / total logged
+// activity hours). Shapes match FuelConsumptionPanel's props so that panel is reused
+// as-is. Missing fuel figures stay absent (no invented zeros).
+export async function loadRigFuelDaily(rigId, from, to) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId || !from || !to) return { avgDailyKl: null, avgLhr: null, trend: [], hasData: false }
+
+  const { data, error } = await supabase
+    .from('reports').select('id, report_date, fuel_consumed_kl')
+    .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to)
+  if (error) throw new Error(error.message)
+  const reports = data || []
+
+  const acts = await fetchActivities(reports.map((r) => r.id))
+  let fuelHours = 0
+  for (const a of acts) fuelHours += Number(a.hrs) || 0
+
+  const fuelByDate = new Map()
+  let totalFuel = 0
+  let fuelSeen = false
+  for (const r of reports) {
+    if (r.fuel_consumed_kl != null) {
+      const kl = Number(r.fuel_consumed_kl) || 0
+      totalFuel += kl
+      fuelSeen = true
+      fuelByDate.set(r.report_date, (fuelByDate.get(r.report_date) || 0) + kl)
+    }
+  }
+  const trend = [...fuelByDate.entries()].map(([date, kl]) => ({ date, kl })).sort((a, b) => a.date.localeCompare(b.date))
+  const avgDailyKl = fuelSeen && fuelByDate.size > 0 ? totalFuel / fuelByDate.size : null
+  const avgLhr = fuelSeen && fuelHours > 0 ? (totalFuel * 1000) / fuelHours : null
+  return { avgDailyKl, avgLhr, trend, hasData: trend.length > 0 }
+}
+
+// Well & Location from the rig's LATEST DDR within [from, to] (max report_date).
+// Returns the as-reported well, days on location, days on well, present operation,
+// OIM and POB. hasReport=false when the rig filed no DDR in the window (honest empty
+// state — never an invented value).
+export async function loadRigWellLocation(rigId, from, to) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId || !from || !to) return { hasReport: false }
+
+  const { data, error } = await supabase
+    .from('reports')
+    .select('report_date, well_no, days_on_location, days_on_well, present_operation, oim, pob_total')
+    .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to)
+    .order('report_date', { ascending: false })
+    .limit(1)
+  if (error) throw new Error(error.message)
+  const r = (data || [])[0]
+  if (!r) return { hasReport: false }
+  return {
+    hasReport: true,
+    date: r.report_date,
+    well: r.well_no ?? null,
+    daysOnLocation: r.days_on_location ?? null,
+    daysOnWell: r.days_on_well ?? null,
+    presentOperation: r.present_operation ?? null,
+    oim: r.oim ?? null,
+    pob: r.pob_total ?? null,
+  }
+}

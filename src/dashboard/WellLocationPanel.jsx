@@ -1,39 +1,42 @@
-// WellLocationPanel — placeholder. Per selected rig: Current well, Days on well,
-// Location, OIM. All shown as "—" for now; these populate from the Well Plan
-// feature (well/location/days) and a new OIM field. No invented values.
+// WellLocationPanel — Well & Location for the SELECTED rig, from its latest DDR in
+// the window (loadRigWellLocation in ddrFleet.js). Shows real reported values; "—"
+// only where a field is genuinely absent. No invented data.
 import { DASH } from './format'
 
-export default function WellLocationPanel({ rigs }) {
+export default function WellLocationPanel({ rigName, data, loading }) {
+  const rows = [
+    ['Current well', data?.well],
+    ['Days on location', data?.daysOnLocation],
+    ['Days on well', data?.daysOnWell],
+    ['Present operation', data?.presentOperation],
+    ['OIM', data?.oim],
+    ['POB (total)', data?.pob],
+  ]
+  const val = (v) => (v == null || v === '' ? DASH : String(v))
+
   return (
-    <div className="panel">
+    <div className="panel accent" style={{ '--k': 'var(--blue)' }}>
       <h3>Well &amp; Location</h3>
-      <div className="psub">Per rig · from the Well Plan feature (coming soon)</div>
-      {rigs.length === 0 ? (
-        <div className="npt-empty">No rigs selected.</div>
-      ) : (
-        <div className="matrix-scroll">
-          <table className="matrix">
-            <thead>
-              <tr><th>Rig</th><th>Current well</th><th>Days on well</th><th>Location</th><th>OIM</th></tr>
-            </thead>
-            <tbody>
-              {rigs.map((name) => (
-                <tr key={name}>
-                  <td>{name}</td>
-                  <td className="mono">{DASH}</td>
-                  <td className="mono">{DASH}</td>
-                  <td>{DASH}</td>
-                  <td>{DASH}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <div className="setting-note">
-        Fields populate from the Well Plan feature (well · location · days on well) and a new OIM
-        field — pending.
+      <div className="psub">
+        {data?.hasReport
+          ? `${rigName || 'Selected rig'} · latest DDR ${data.date}`
+          : (rigName || 'Selected rig')}
       </div>
+
+      {loading ? (
+        <div className="state">Loading…</div>
+      ) : !data?.hasReport ? (
+        <div className="npt-empty">No DDR for this rig in the selected window.</div>
+      ) : (
+        <dl className="wl-grid">
+          {rows.map(([k, v]) => (
+            <div className="wl-row" key={k}>
+              <dt>{k}</dt>
+              <dd>{val(v)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   )
 }

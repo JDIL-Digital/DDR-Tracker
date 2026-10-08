@@ -1767,3 +1767,111 @@ body {
 .das-log li { font-size: 12px; line-height: 1.45; }
 .das-time { color: var(--blue); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .das-muted { color: var(--dim); }
+
+/* ---- Analytics redesign: 2x3 responsive panel grid ------------------------ */
+/* Guard: never let Analytics content push the page sideways. overflow-x: clip
+   clips horizontally WITHOUT creating a scroll container (so sticky/other layout
+   is untouched) and leaves the fixed enlarge modal unaffected. */
+.analytics-wrap { overflow-x: clip; }
+
+.analytics-grid {
+  display: grid;
+  /* minmax(0, 1fr) is essential: plain 1fr uses min-content as the floor and lets a
+     wide chart blow the column out past the viewport. 0 lets the column shrink. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+  align-items: stretch; /* equalize card heights within each row */
+  max-width: 100%;
+}
+/* Every grid item must be able to shrink below its content width. */
+.analytics-grid > * { min-width: 0; }
+/* Each row sizes to its own tallest panel (grid-auto-rows: auto), so a light
+   panel like Well & Location aligns to the row's natural height — no giant blanks. */
+.analytics-grid > .xpand { height: 100%; }
+.analytics-grid > .xpand > .panel { height: 100%; box-sizing: border-box; }
+.analytics-cell-empty { display: block; } /* invisible filler for the 6th cell */
+
+@media (max-width: 1100px) {
+  .analytics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .analytics-grid { grid-template-columns: 1fr; }
+  .analytics-cell-empty { display: none; } /* no trailing empty row when single-column */
+}
+
+/* ---- Bar charts that must fit a narrow card -------------------------------- */
+/* The chart fills the card; columns (flex: 1 1 0) shrink so bars get thinner as the
+   card narrows. A tiny per-column floor + min-content on the chart means that only
+   when days are truly packed does THIS wrapper scroll — the page never does. */
+.chart-fit { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.chart-fit > .chart { min-width: min-content; gap: 4px; width: 100%; }
+.chart-fit .col { min-width: 4px; }
+.chart-fit .cl, .chart-fit .cv { white-space: nowrap; }
+/* In the enlarge modal: comfortable bars + every label (enlarged prop → all shown). */
+.xpand-body .chart-fit > .chart { gap: 14px; }
+.xpand-body .chart-fit .col { min-width: 18px; }
+
+/* ---- Analytics redesign: click-to-enlarge wrapper (Expandable) ------------- */
+.xpand { position: relative; }
+.xpand-btn {
+  position: absolute; top: 10px; right: 10px; z-index: 3;
+  width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+  border-radius: 7px; cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.6;
+  transition: opacity 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.xpand:hover .xpand-btn { opacity: 1; }
+.xpand-btn:hover { border-color: var(--border2); color: var(--text); }
+.xpand-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; opacity: 1; }
+
+.xpand-overlay {
+  position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.xpand-modal {
+  position: relative; width: min(1100px, 96vw); max-height: 92vh; overflow: auto;
+  background: var(--card); border: 1px solid var(--border2); border-radius: 13px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45); padding: 10px;
+}
+.xpand-close {
+  position: absolute; top: 12px; right: 12px; z-index: 2;
+  width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; font-size: 15px; line-height: 1;
+}
+.xpand-close:hover { border-color: var(--border2); color: var(--text); }
+.xpand-close:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* The enlarged panel: bigger chart, full-width, no inner border (the modal frames it). */
+.xpand-body .panel { border: 0; border-radius: 10px; padding: 22px 26px; }
+.xpand-body .panel.accent { border-left: 3px solid var(--k, var(--green)); }
+.xpand-body .chart { height: 320px; }
+.xpand-body .rtd-chart { height: 360px; }
+
+/* ---- Analytics: rig time distribution (daily stacked bars) ---------------- */
+.rtd-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 2px 0 14px; }
+.rtd-key { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.rtd-key i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.rtd-chart { height: 170px; }
+.rtd-stack {
+  width: 70%; max-width: 46px; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-start;
+  border-radius: 4px 4px 0 0; overflow: hidden;
+}
+.rtd-seg { width: 100%; min-height: 2px; }
+.rtd-seg:first-child { border-radius: 4px 4px 0 0; }
+
+/* ---- Analytics: Well & Location key/value grid ---------------------------- */
+.wl-grid { display: flex; flex-direction: column; gap: 0; margin: 2px 0 0; }
+.wl-row { display: flex; justify-content: space-between; gap: 18px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.wl-row:last-child { border-bottom: 0; }
+.wl-row dt { color: var(--dim); font-size: 12px; font-weight: 600; }
+.wl-row dd { margin: 0; color: var(--text); font-size: 13px; text-align: right; }
+
+/* ---- Analytics: "coming next" placeholder panels ------------------------- */
+.soon-panel { min-height: 150px; display: flex; flex-direction: column; }
+.soon-badge {
+  margin-top: auto; align-self: flex-start;
+  background: var(--panel); border: 1px dashed var(--border2); color: var(--muted);
+  font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px;
+}
