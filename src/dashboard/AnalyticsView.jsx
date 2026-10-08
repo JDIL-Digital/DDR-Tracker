@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { loadRigsForPicker } from './settings'
-import { loadRigTimeDistributionDaily, loadRigFuelDaily, loadRigWellLocation, loadRigWaterDaily } from './ddrFleet'
+import { loadRigTimeDistributionDaily, loadRigFuelDaily, loadRigWellLocation, loadRigWaterDaily, loadRigDepthVsDays } from './ddrFleet'
 import { todayISO, prettyDate, shiftDate } from './format'
 import { LoadError } from './LoadState'
 import TimeWindowSelector from './TimeWindowSelector'
@@ -20,6 +20,7 @@ import FuelConsumptionPanel from './FuelConsumptionPanel'
 import RigTimeDistributionDaily from './RigTimeDistributionDaily'
 import WellLocationPanel from './WellLocationPanel'
 import WaterPanel from './WaterPanel'
+import PlannedVsActualPanel from './PlannedVsActualPanel'
 
 function computeRange(mode, cs, ce) {
   const end = mode === 'custom' ? ce : todayISO()
@@ -63,8 +64,9 @@ export default function AnalyticsView() {
       loadRigTimeDistributionDaily(rigId, range.start, range.end),
       loadRigWellLocation(rigId, range.start, range.end),
       loadRigWaterDaily(rigId, range.start, range.end),
+      loadRigDepthVsDays(rigId), // whole-well plan vs actual — not window-scoped
     ])
-      .then(([fuel, dist, well, water]) => { if (!cancelled) setData({ fuel, dist, well, water }) })
+      .then(([fuel, dist, well, water, depth]) => { if (!cancelled) setData({ fuel, dist, well, water, depth }) })
       .catch((e) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -116,11 +118,7 @@ export default function AnalyticsView() {
         //   Row 2: Portable Water    | Well & Location       | (empty 6th cell)
         <div className="analytics-grid">
           <Expandable>
-            <div className="panel accent soon-panel" style={{ '--k': 'var(--amber)' }}>
-              <h3>Planned vs Actual</h3>
-              <div className="psub">Depth vs days — planned curve vs DPR actuals</div>
-              <div className="soon-badge">Coming next</div>
-            </div>
+            <PlannedVsActualPanel rigName={rigName} data={data?.depth} loading={loading} />
           </Expandable>
 
           <Expandable>
