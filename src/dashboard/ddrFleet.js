@@ -352,3 +352,47 @@ export async function loadRigWellLocation(rigId, from, to) {
     pob: r.pob_total ?? null,
   }
 }
+
+// PORTABLE (potable) WATER made vs consumed per DAY for ONE rig over [from, to].
+// The DDR extractor writes potable water into the `inventory` table under the item
+// label "P/Water" (most rigs) or "POTWATER" (Jindal Explorer) — NOT "D/Water", which
+// is drill water and is deliberately excluded. made = inventory.generated,
+// consumed = inventory.consumed (verified by opening+received+made−consumed=closing).
+// inventory has no rig/date of its own, so we map via the rig's reports in range.
+// A day with no potable-water row is simply absent (no invented zeros). If a rig
+// somehow logs more than one potable row for a date, they are summed.
+export async function loadRigWaterDaily(rigId, from, to) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId || !from || !to) return { days: [], hasData: false, unit: null, from, to }
+
+  const { data: reps, error: repErr } = await supabase
+    .from('reports').select('id, report_date')
+    .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to)
+  if (repErr) throw new Error(repErr.message)
+  const reports = reps || []
+  const dateByReport = new Map(reports.map((r) => [r.id, r.report_date]))
+  if (reports.length === 0) return { days: [], hasData: false, unit: null, from, to }
+
+  // Potable water only: P/Water or POTWATER (+ tolerant variants). Excludes D/Water.
+  const { data: inv, error: invErr } = await supabase
+    .from('inventory')
+    .select('report_id, item, unit, generated, consumed')
+    .in('report_id', reports.map((r) => r.id))
+    .or('item.ilike."%p/water%",item.ilike."%potwater%",item.ilike."%potable%",item.ilike."%p water%"')
+  if (invErr) throw new Error(invErr.message)
+
+  const byDate = new Map()
+  let unit = null
+  for (const row of inv || []) {
+    const d = dateByReport.get(row.report_id)
+    if (!d) continue
+    if (!byDate.has(d)) byDate.set(d, { date: d, made: 0, consumed: 0 })
+    const e = byDate.get(d)
+    e.made += Number(row.generated) || 0
+    e.consumed += Number(row.consumed) || 0
+    if (!unit && row.unit) unit = row.unit
+  }
+
+  const days = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+  return { days, hasData: days.length > 0, unit, from, to }
+}

@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { loadRigsForPicker } from './settings'
-import { loadRigTimeDistributionDaily, loadRigFuelDaily, loadRigWellLocation } from './ddrFleet'
+import { loadRigTimeDistributionDaily, loadRigFuelDaily, loadRigWellLocation, loadRigWaterDaily } from './ddrFleet'
 import { todayISO, prettyDate, shiftDate } from './format'
 import { LoadError } from './LoadState'
 import TimeWindowSelector from './TimeWindowSelector'
@@ -19,6 +19,7 @@ import Expandable from './Expandable'
 import FuelConsumptionPanel from './FuelConsumptionPanel'
 import RigTimeDistributionDaily from './RigTimeDistributionDaily'
 import WellLocationPanel from './WellLocationPanel'
+import WaterPanel from './WaterPanel'
 
 function computeRange(mode, cs, ce) {
   const end = mode === 'custom' ? ce : todayISO()
@@ -61,8 +62,9 @@ export default function AnalyticsView() {
       loadRigFuelDaily(rigId, range.start, range.end),
       loadRigTimeDistributionDaily(rigId, range.start, range.end),
       loadRigWellLocation(rigId, range.start, range.end),
+      loadRigWaterDaily(rigId, range.start, range.end),
     ])
-      .then(([fuel, dist, well]) => { if (!cancelled) setData({ fuel, dist, well }) })
+      .then(([fuel, dist, well, water]) => { if (!cancelled) setData({ fuel, dist, well, water }) })
       .catch((e) => { if (!cancelled) setError(e.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -137,11 +139,11 @@ export default function AnalyticsView() {
           </Expandable>
 
           <Expandable>
-            <div className="panel accent soon-panel" style={{ '--k': 'var(--blue)' }}>
-              <h3>Portable Water</h3>
-              <div className="psub">Made vs consumed per day · single rig</div>
-              <div className="soon-badge">Coming next</div>
-            </div>
+            <WaterPanel
+              days={data?.water?.days ?? []}
+              hasData={data?.water?.hasData ?? false}
+              unit={data?.water?.unit ?? null}
+            />
           </Expandable>
 
           <Expandable>

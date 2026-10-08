@@ -1861,6 +1861,13 @@ body {
 .rtd-seg { width: 100%; min-height: 2px; }
 .rtd-seg:first-child { border-radius: 4px 4px 0 0; }
 
+/* ---- Analytics: portable water (grouped Made vs Consumed bars) ------------- */
+.water-pair {
+  width: 82%; max-width: 46px; height: 100%;
+  display: flex; align-items: flex-end; justify-content: center; gap: 2px;
+}
+.water-b { width: 45%; min-width: 2px; border-radius: 3px 3px 0 0; }
+
 /* ---- Analytics: Well & Location key/value grid ---------------------------- */
 .wl-grid { display: flex; flex-direction: column; gap: 0; margin: 2px 0 0; }
 .wl-row { display: flex; justify-content: space-between; gap: 18px; padding: 10px 0; border-bottom: 1px solid var(--border); }
