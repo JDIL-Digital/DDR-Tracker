@@ -79,25 +79,36 @@ function phaseForDay(phases, d) {
   return phases.length ? phases[phases.length - 1].label : DASH
 }
 
-function PlanBody({ plan }) {
+function PlanBody({ plan, actual, showTable = true }) {
   const { plotted, breakpoints, tdDepth, tdDay } = buildPlanned(plan)
 
   if (!plotted.length) {
     return <div className="npt-empty">The verified plan has no readable planned depths to chart.</div>
   }
 
+  // ACTUAL (red) — daily depth vs days-on-well, when available. Purely additive:
+  // with no actual points the chart renders exactly as the planned-only version.
+  const act = (Array.isArray(actual) ? actual : [])
+    .filter((a) => a && a.depth != null && a.day != null && !Number.isNaN(a.depth) && !Number.isNaN(a.day))
+    .sort((a, b) => a.day - b.day)
+  const hasActual = act.length > 0
+  const maxActDay = hasActual ? Math.max(...act.map((a) => a.day)) : 0
+  const maxActDepth = hasActual ? Math.max(...act.map((a) => a.depth)) : 0
+  const actDepthByDay = new Map(act.map((a) => [Math.round(a.day), a]))
+
   const W = 680
   const H = 340
   const P = { l: 54, r: 16, t: 16, b: 44 }
-  // X ends at TD day with a small headroom (drilling scope — NOT total planned days).
-  const xMax = Math.max(tdDay + Math.max(3, Math.ceil(tdDay * 0.05)), 1)
-  const yMaxRaw = Math.max(...plotted.map((p) => p.depth), plan.targetDepthM || 0, 1)
+  // X ends at the later of planned TD day / last actual day, with a small headroom.
+  const xMax = Math.max(tdDay + Math.max(3, Math.ceil(tdDay * 0.05)), maxActDay + (hasActual ? 2 : 0), 1)
+  const yMaxRaw = Math.max(...plotted.map((p) => p.depth), plan.targetDepthM || 0, maxActDepth, 1)
   const yMax = Math.ceil(yMaxRaw / 500) * 500 // nice round depth axis
 
   const x = (day) => P.l + (day / xMax) * (W - P.l - P.r)
   const y = (depth) => (H - P.b) - (depth / yMax) * (H - P.t - P.b) // normal axis: 0 at bottom, deeper = higher
 
   const linePath = breakpoints.map((b, i) => `${i === 0 ? 'M' : 'L'} ${x(b.day).toFixed(1)},${y(b.depth).toFixed(1)}`).join(' ')
+  const actPath = hasActual ? act.map((a, i) => `${i === 0 ? 'M' : 'L'} ${x(a.day).toFixed(1)},${y(a.depth).toFixed(1)}`).join(' ') : ''
 
   const yticks = 5
   const xticks = 6
@@ -152,6 +163,13 @@ function PlanBody({ plan }) {
               <title>{`${p.activity}\n${round0(p.depth)} m MDKB · day ${round0(p.cumDay)}${p.confidence ? ` · ${p.confidence} conf` : ''}`}</title>
             </circle>
           ))}
+          {/* actual line + daily points (red), when DPRs cover this well */}
+          {hasActual && <path d={actPath} fill="none" className="depth-actual-line" stroke="var(--red-solid)" strokeWidth="2" />}
+          {hasActual && act.map((a, i) => (
+            <circle key={`a${i}`} cx={x(a.day)} cy={y(a.depth)} r="2.8" fill="var(--red-solid)">
+              <title>{`${round0(a.depth)} m MDKB · day ${round0(a.day)}${a.date ? ` · ${a.date}` : ''}`}</title>
+            </circle>
+          ))}
           {/* axis labels */}
           <text x={16} y={(P.t + H - P.b) / 2} className="axlbl" transform={`rotate(-90 16 ${(P.t + H - P.b) / 2})`} textAnchor="middle">Depth (m MDKB)</text>
           <text x={(P.l + W - P.r) / 2} y={H - 6} className="axlbl" textAnchor="middle">Days from spud</text>
@@ -160,9 +178,14 @@ function PlanBody({ plan }) {
 
       <div className="ilt-legend depth-legend">
         <span><i className="ldot" style={{ background: 'var(--dim)' }} />Planned (verified)</span>
-        <span><i className="ldot" style={{ background: 'var(--red-solid)' }} />Actual — awaiting DPRs (needs spud date + daily depth)</span>
+        {hasActual ? (
+          <span><i className="ldot" style={{ background: 'var(--red-solid)' }} />Actual (DPR daily depth vs days on well)</span>
+        ) : (
+          <span><i className="ldot" style={{ background: 'var(--red-solid)' }} />Actual — awaiting DPRs (needs spud date + daily depth)</span>
+        )}
       </div>
 
+      {showTable && (<>
       <div className="eyebrow" style={{ margin: '16px 0 6px' }}>Day-by-day (planned vs actual)</div>
       <div className="depth-table-scroll matrix-scroll">
         <table className="matrix">
@@ -180,31 +203,45 @@ function PlanBody({ plan }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.day}>
-                <td className="num mono">{r.day}</td>
-                <td>{r.activity}</td>
-                <td className="num mono">{r.plannedDepth != null ? r.plannedDepth : DASH}</td>
-                <td className="mono">{DASH}</td>
-                <td className="num mono">{DASH}</td>
-                <td className="num mono">{DASH}</td>
-                <td className="num mono">{DASH}</td>
-                <td className="num mono">{DASH}</td>
-                <td>{DASH}</td>
-              </tr>
-            ))}
+            {rows.map((r) => {
+              const a = actDepthByDay.get(r.day)
+              const aPrev = actDepthByDay.get(r.day - 1)
+              const actualDepth = a ? round0(a.depth) : null
+              const progress = a && aPrev ? round0(a.depth - aPrev.depth) : null
+              const variance = a && r.plannedDepth != null ? round0(a.depth - r.plannedDepth) : null
+              return (
+                <tr key={r.day}>
+                  <td className="num mono">{r.day}</td>
+                  <td>{r.activity}</td>
+                  <td className="num mono">{r.plannedDepth != null ? r.plannedDepth : DASH}</td>
+                  <td className="mono">{a?.date ?? DASH}</td>
+                  <td className="num mono">{actualDepth != null ? actualDepth : DASH}</td>
+                  <td className="num mono">{progress != null ? progress : DASH}</td>
+                  <td className="num mono">{DASH}</td>
+                  <td className="num mono">{variance != null ? variance : DASH}</td>
+                  <td>{DASH}</td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
       <div className="setting-note">
-        Actual columns populate once DPRs carry a <b>spud/commenced date</b> and <b>daily depth</b> for
-        this well. Until then they stay <span className="mono">{DASH}</span> — no values are invented.
+        {hasActual ? (
+          <>Actual depth/date come from this well’s DPRs (daily depth vs days on well). Cum NPT and
+          remarks stay <span className="mono">{DASH}</span> — not wired into this view yet.</>
+        ) : (
+          <>Actual columns populate once DPRs carry a <b>spud/commenced date</b> and <b>daily depth</b> for
+          this well. Until then they stay <span className="mono">{DASH}</span> — no values are invented.</>
+        )}
       </div>
+      </>)}
     </>
   )
 }
 
-export default function DepthVsDaysChart({ rigs = [] }) {
+// Multi-rig mode (owns the rig-picker state) — kept intact for the Fleet/legacy usage.
+function MultiRigDepthVsDays({ rigs }) {
   const withPlan = rigs.filter((r) => r.depthPlan)
   const [rigName, setRigName] = useState(() => withPlan[0]?.name || rigs[0]?.name || '')
   const rig = rigs.find((r) => r.name === rigName) || rigs[0] || null
@@ -236,4 +273,11 @@ export default function DepthVsDaysChart({ rigs = [] }) {
       {body}
     </div>
   )
+}
+
+export default function DepthVsDaysChart({ rigs = [], plan = null, actual = null }) {
+  // Single-rig mode (Analytics tab): the caller supplies one verified plan + actuals
+  // and wraps us in its own panel, so we render just the chart body (no panel/picker).
+  if (plan) return <PlanBody plan={plan} actual={actual} showTable={false} />
+  return <MultiRigDepthVsDays rigs={rigs} />
 }

@@ -238,3 +238,236 @@ export async function loadRigCards(date) {
     }
   })
 }
+
+// ---------------------------------------------------------------------------
+// Analytics tab (SINGLE-RIG) loaders. These are deliberately separate from the
+// Fleet loaders above — loadRigTimeDistribution (Fleet, all rigs, range-cumulative)
+// is left untouched; the ones below are scoped to ONE rig and are PER DAY.
+// ---------------------------------------------------------------------------
+
+// RIG TIME DISTRIBUTION per DAY for ONE rig over [from, to] inclusive. For each of
+// the rig's DDR report_dates, sums activities.hrs grouped by code_master.condition:
+// RODR / NODR / EBDR. MDR (rig-move) is EXCLUDED; activity hours whose code has no
+// condition (unmapped bare code) are surfaced as nullCodeHrs so a day's bar is never
+// silently short. A reporting day with zero hours still appears (empty bar).
+export async function loadRigTimeDistributionDaily(rigId, from, to) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId || !from || !to) return { days: [], hasData: false, from, to }
+
+  const [codesRes, repRes] = await Promise.all([
+    supabase.from('code_master').select('code, condition'),
+    supabase.from('reports').select('id, report_date')
+      .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to),
+  ])
+  for (const r of [codesRes, repRes]) if (r.error) throw new Error(r.error.message)
+
+  const condByCode = new Map((codesRes.data || []).map((c) => [c.code, c.condition]))
+  const reports = repRes.data || []
+  const dateByReport = new Map(reports.map((r) => [r.id, r.report_date]))
+
+  const byDate = new Map()
+  const ensure = (d) => {
+    if (!byDate.has(d)) byDate.set(d, { date: d, RODR: 0, NODR: 0, EBDR: 0, nullCodeHrs: 0 })
+    return byDate.get(d)
+  }
+  // Seed every reporting day so a day with no classifiable hours still shows.
+  for (const r of reports) ensure(r.report_date)
+
+  const acts = await fetchActivities(reports.map((r) => r.id))
+  for (const a of acts) {
+    const d = dateByReport.get(a.report_id)
+    if (!d) continue
+    const e = ensure(d)
+    const cond = condByCode.get(a.code)
+    if (cond === 'RODR' || cond === 'NODR' || cond === 'EBDR') e[cond] += Number(a.hrs) || 0
+    else if (cond === 'MDR') { /* rig-move — excluded from the RODR/NODR/EBDR distribution */ }
+    else e.nullCodeHrs += Number(a.hrs) || 0 // code null / no condition → surfaced, never dropped
+  }
+
+  const days = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+  return { days, hasData: days.length > 0, from, to }
+}
+
+// Daily diesel/HSD consumption for ONE rig over [from, to]. Returns a per-day trend
+// (KL from reports.fuel_consumed_kl), the average daily burn (KL/day over the days
+// that reported fuel), and the average rate (L/hr = total fuel / total logged
+// activity hours). Shapes match FuelConsumptionPanel's props so that panel is reused
+// as-is. Missing fuel figures stay absent (no invented zeros).
+export async function loadRigFuelDaily(rigId, from, to) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId || !from || !to) return { avgDailyKl: null, avgLhr: null, trend: [], hasData: false }
+
+  const { data, error } = await supabase
+    .from('reports').select('id, report_date, fuel_consumed_kl')
+    .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to)
+  if (error) throw new Error(error.message)
+  const reports = data || []
+
+  const acts = await fetchActivities(reports.map((r) => r.id))
+  let fuelHours = 0
+  for (const a of acts) fuelHours += Number(a.hrs) || 0
+
+  const fuelByDate = new Map()
+  let totalFuel = 0
+  let fuelSeen = false
+  for (const r of reports) {
+    if (r.fuel_consumed_kl != null) {
+      const kl = Number(r.fuel_consumed_kl) || 0
+      totalFuel += kl
+      fuelSeen = true
+      fuelByDate.set(r.report_date, (fuelByDate.get(r.report_date) || 0) + kl)
+    }
+  }
+  const trend = [...fuelByDate.entries()].map(([date, kl]) => ({ date, kl })).sort((a, b) => a.date.localeCompare(b.date))
+  const avgDailyKl = fuelSeen && fuelByDate.size > 0 ? totalFuel / fuelByDate.size : null
+  const avgLhr = fuelSeen && fuelHours > 0 ? (totalFuel * 1000) / fuelHours : null
+  return { avgDailyKl, avgLhr, trend, hasData: trend.length > 0 }
+}
+
+// Well & Location from the rig's LATEST DDR within [from, to] (max report_date).
+// Returns the as-reported well, days on location, days on well, present operation,
+// OIM and POB. hasReport=false when the rig filed no DDR in the window (honest empty
+// state — never an invented value).
+export async function loadRigWellLocation(rigId, from, to) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId || !from || !to) return { hasReport: false }
+
+  const { data, error } = await supabase
+    .from('reports')
+    .select('report_date, well_no, days_on_location, days_on_well, present_operation, oim, pob_total')
+    .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to)
+    .order('report_date', { ascending: false })
+    .limit(1)
+  if (error) throw new Error(error.message)
+  const r = (data || [])[0]
+  if (!r) return { hasReport: false }
+  return {
+    hasReport: true,
+    date: r.report_date,
+    well: r.well_no ?? null,
+    daysOnLocation: r.days_on_location ?? null,
+    daysOnWell: r.days_on_well ?? null,
+    presentOperation: r.present_operation ?? null,
+    oim: r.oim ?? null,
+    pob: r.pob_total ?? null,
+  }
+}
+
+// PORTABLE (potable) WATER made vs consumed per DAY for ONE rig over [from, to].
+// The DDR extractor writes potable water into the `inventory` table under the item
+// label "P/Water" (most rigs) or "POTWATER" (Jindal Explorer) — NOT "D/Water", which
+// is drill water and is deliberately excluded. made = inventory.generated,
+// consumed = inventory.consumed (verified by opening+received+made−consumed=closing).
+// inventory has no rig/date of its own, so we map via the rig's reports in range.
+// A day with no potable-water row is simply absent (no invented zeros). If a rig
+// somehow logs more than one potable row for a date, they are summed.
+export async function loadRigWaterDaily(rigId, from, to) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId || !from || !to) return { days: [], hasData: false, unit: null, from, to }
+
+  const { data: reps, error: repErr } = await supabase
+    .from('reports').select('id, report_date')
+    .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to)
+  if (repErr) throw new Error(repErr.message)
+  const reports = reps || []
+  const dateByReport = new Map(reports.map((r) => [r.id, r.report_date]))
+  if (reports.length === 0) return { days: [], hasData: false, unit: null, from, to }
+
+  // Potable water only: P/Water or POTWATER (+ tolerant variants). Excludes D/Water.
+  const { data: inv, error: invErr } = await supabase
+    .from('inventory')
+    .select('report_id, item, unit, generated, consumed')
+    .in('report_id', reports.map((r) => r.id))
+    .or('item.ilike."%p/water%",item.ilike."%potwater%",item.ilike."%potable%",item.ilike."%p water%"')
+  if (invErr) throw new Error(invErr.message)
+
+  const byDate = new Map()
+  let unit = null
+  for (const row of inv || []) {
+    const d = dateByReport.get(row.report_id)
+    if (!d) continue
+    if (!byDate.has(d)) byDate.set(d, { date: d, made: 0, consumed: 0 })
+    const e = byDate.get(d)
+    e.made += Number(row.generated) || 0
+    e.consumed += Number(row.consumed) || 0
+    if (!unit && row.unit) unit = row.unit
+  }
+
+  const days = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+  return { days, hasData: days.length > 0, unit, from, to }
+}
+
+// DEPTH vs DAYS (Planned vs Actual) for ONE rig's current/most-recent well.
+// PLANNED: the rig's most-recent VERIFIED well_plan (depths_verified=true with
+// non-empty planned_depth_points) → the raw points (planned_depth_m vs
+// cumulative_days). ACTUAL: that rig's reports for the SAME well (well_no matched to
+// the plan's well_name) → depth_md_m vs days_on_well (day-0 axis that resets per well;
+// used instead of spud_date, which is often null). Everything honest: no plan →
+// hasPlan=false; verified plan but no overlapping DDRs → hasActual=false. Does not
+// change the existing loaders.
+export async function loadRigDepthVsDays(rigId) {
+  const EMPTY = { planned: [], actual: [], wellName: null, targetDepthM: null, hasPlan: false, hasActual: false, planVerified: false }
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigId) return EMPTY
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+  const { data: wps, error: wpErr } = await supabase
+    .from('well_plans')
+    .select('well_name, depths_verified, target_depth_m, planned_depth_points, raw_extract, created_at')
+    .eq('rig_id', rigId).eq('extraction_status', 'extracted')
+    .order('created_at', { ascending: false })
+  if (wpErr) throw new Error(wpErr.message)
+  const plans = wps || []
+  const hasPlan = plans.length > 0
+
+  // Prefer the most-recent VERIFIED plan with usable depth points; else the newest plan
+  // (so we can still name the well for an honest "not verified" message).
+  const verified = plans.find((p) => p.depths_verified && Array.isArray(p.planned_depth_points) && p.planned_depth_points.length)
+  const chosen = verified || plans[0] || null
+  const planVerified = !!verified
+  const wellName = chosen?.well_name || null
+  const targetDepthM = chosen?.target_depth_m ?? null
+  const planned = planVerified ? (verified.planned_depth_points || []) : []
+
+  // Last planned DRILLING day = the chart's TD day: running-sum of each depth point's
+  // cumulative_days up to the last point that has a depth (matches DepthVsDaysChart's
+  // buildPlanned, which treats cumulative_days as per-phase increments — e.g. B-157N
+  // 12+3+6+10+21+16 = 68, NOT the 181-day full plan that includes logging/PT/abandon).
+  // Fallback to raw_extract.total_planned_days only if no point carries days.
+  let lastDrillingDay = 0
+  {
+    let cum = 0
+    for (const p of planned) {
+      cum += Number(p?.cumulative_days) || 0
+      if (p?.planned_depth_m != null) lastDrillingDay = cum
+    }
+    if (!lastDrillingDay) lastDrillingDay = Number(verified?.raw_extract?.total_planned_days) || 0
+  }
+
+  // Actual drilling curve for the SAME well.
+  let actual = []
+  if (wellName) {
+    const { data: reps, error: repErr } = await supabase
+      .from('reports').select('report_date, well_no, depth_md_m, days_on_well')
+      .eq('rig_id', rigId)
+    if (repErr) throw new Error(repErr.message)
+    const nw = norm(wellName)
+    actual = (reps || [])
+      .filter((r) => {
+        const rn = norm(r.well_no)
+        // Tolerant match: "B-157N" (plan) vs "B-157N-L" (report), either direction.
+        return rn && (rn === nw || rn.startsWith(nw) || nw.startsWith(rn))
+      })
+      .filter((r) => r.depth_md_m != null && r.days_on_well != null)
+      .map((r) => ({ day: Number(r.days_on_well), depth: Number(r.depth_md_m), date: r.report_date }))
+      .sort((a, b) => a.day - b.day)
+  }
+
+  // DRILLING-WINDOW GUARD: only count actuals that overlap the planned drilling phase
+  // (days_on_well <= last planned drilling day). This excludes post-TD tail reports
+  // (e.g. Jindal Supreme's DST/abandonment at day ~127+), so a flat far-right actual
+  // cluster never masquerades as drilling progress. Needs a verified plan to apply.
+  const hasActual = planVerified && lastDrillingDay > 0 && actual.some((a) => a.day <= lastDrillingDay)
+
+  return { planned, actual, wellName, targetDepthM, hasPlan, hasActual, planVerified }
+}
