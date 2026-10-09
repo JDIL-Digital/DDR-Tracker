@@ -324,9 +324,16 @@ export async function loadRigFuelDaily(rigId, from, to) {
   if (error) throw new Error(error.message)
   const reports = data || []
 
+  const dateByReport = new Map(reports.map((r) => [r.id, r.report_date]))
   const acts = await fetchActivities(reports.map((r) => r.id))
   let fuelHours = 0
-  for (const a of acts) fuelHours += Number(a.hrs) || 0
+  const hoursByDate = new Map() // per-day logged activity hours → per-day L/hr
+  for (const a of acts) {
+    const hrs = Number(a.hrs) || 0
+    fuelHours += hrs
+    const d = dateByReport.get(a.report_id)
+    if (d) hoursByDate.set(d, (hoursByDate.get(d) || 0) + hrs)
+  }
 
   const fuelByDate = new Map()
   let totalFuel = 0
@@ -339,7 +346,12 @@ export async function loadRigFuelDaily(rigId, from, to) {
       fuelByDate.set(r.report_date, (fuelByDate.get(r.report_date) || 0) + kl)
     }
   }
-  const trend = [...fuelByDate.entries()].map(([date, kl]) => ({ date, kl })).sort((a, b) => a.date.localeCompare(b.date))
+  const trend = [...fuelByDate.entries()]
+    .map(([date, kl]) => {
+      const dh = hoursByDate.get(date) || 0
+      return { date, kl, lhr: dh > 0 ? (kl * 1000) / dh : null } // per-day L/hr (null if no hours)
+    })
+    .sort((a, b) => a.date.localeCompare(b.date))
   const avgDailyKl = fuelSeen && fuelByDate.size > 0 ? totalFuel / fuelByDate.size : null
   const avgLhr = fuelSeen && fuelHours > 0 ? (totalFuel * 1000) / fuelHours : null
   return { avgDailyKl, avgLhr, trend, hasData: trend.length > 0 }
