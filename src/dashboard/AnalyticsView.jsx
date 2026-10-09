@@ -1,11 +1,11 @@
 // Analytics tab — SINGLE-RIG view. One rig at a time (dropdown, default = first by
 // sort_order) over a chosen time window (24H / 7D / 30D / Custom). Panels show the
 // selected rig's trends over the window:
-//   • Diesel consumption (FuelConsumptionPanel, reused)
-//   • Rig time distribution RODR/NODR/EBDR per day (RigTimeDistributionDaily)
-//   • Well & Location (WellLocationPanel, from the latest DDR in the window)
-//   • Portable Water (made vs consumed, WaterPanel)
 //   • Depth vs Days (current well: depth curve + NPT markers + casing, DepthVsDaysPanel)
+//   • NODR trend + EBDR trend (daily downtime lines w/ per-day activity tooltips)
+//   • Diesel consumption (FuelConsumptionPanel, reused)
+//   • Portable Water (made vs consumed, WaterPanel)
+//   • Well & Location (WellLocationPanel, from the latest DDR in the window)
 // Every panel is wrapped in <Expandable> (click to enlarge). READ-ONLY; nothing is
 // invented — absent data shows honest empty states.
 import { useEffect, useMemo, useState } from 'react'
@@ -17,7 +17,7 @@ import { LoadError } from './LoadState'
 import TimeWindowSelector from './TimeWindowSelector'
 import Expandable from './Expandable'
 import FuelConsumptionPanel from './FuelConsumptionPanel'
-import RigTimeDistributionDaily from './RigTimeDistributionDaily'
+import DowntimeTrendPanel from './DowntimeTrendPanel'
 import WellLocationPanel from './WellLocationPanel'
 import WaterPanel from './WaterPanel'
 import DepthVsDaysPanel from './DepthVsDaysPanel'
@@ -114,15 +114,34 @@ export default function AnalyticsView() {
       ) : (
         // 3-per-row grid (collapses to 2 then 1 as the viewport narrows).
         // Order L→R, top→bottom:
-        //   Row 1: Depth vs Days | Rig Time Distribution | Diesel Consumption
-        //   Row 2: Portable Water    | Well & Location       | (empty 6th cell)
+        //   Row 1: Depth vs Days | NODR trend | EBDR trend
+        //   Row 2: Diesel Consumption | Portable Water | Well & Location
         <div className="analytics-grid">
           <Expandable>
             <DepthVsDaysPanel rigName={rigName} data={data?.depth} loading={loading} />
           </Expandable>
 
           <Expandable>
-            <RigTimeDistributionDaily
+            <DowntimeTrendPanel
+              title="NODR Trend"
+              subtitle="Daily non-operating hours · hover a point for that day's causes"
+              seriesKey="NODR"
+              itemsKey="nodrItems"
+              condLabel="NODR"
+              color="var(--amber)"
+              days={data?.dist?.days ?? []}
+              hasData={data?.dist?.hasData ?? false}
+            />
+          </Expandable>
+
+          <Expandable>
+            <DowntimeTrendPanel
+              title="EBDR Trend"
+              subtitle="Daily equipment-breakdown hours · hover a point for that day's causes"
+              seriesKey="EBDR"
+              itemsKey="ebdrItems"
+              condLabel="EBDR"
+              color="var(--red-solid)"
               days={data?.dist?.days ?? []}
               hasData={data?.dist?.hasData ?? false}
             />
@@ -147,9 +166,6 @@ export default function AnalyticsView() {
           <Expandable>
             <WellLocationPanel rigName={rigName} data={data?.well} loading={loading} />
           </Expandable>
-
-          {/* 6th cell reserved — kept empty for now so the 2×3 grid stays complete. */}
-          <div className="analytics-cell-empty" aria-hidden="true" />
         </div>
       )}
     </div>

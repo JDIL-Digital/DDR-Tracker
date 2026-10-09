@@ -1887,6 +1887,9 @@ body {
 .dvd-tip .tip-meta { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
 .dvd-tip .tip-reason { color: var(--text); line-height: 1.42; white-space: normal; overflow-wrap: anywhere; }
 .dvd-tip .tip-approx { color: var(--amber); font-size: 11px; margin-bottom: 4px; }
+.dvd-tip .dt-tip-list { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.dvd-tip .dt-tip-list li { font-size: 11.5px; line-height: 1.35; color: var(--text); overflow-wrap: anywhere; }
+.dvd-tip .dt-tip-list b { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* ---- Analytics: Well & Location key/value grid ---------------------------- */
 .wl-grid { display: flex; flex-direction: column; gap: 0; margin: 2px 0 0; }

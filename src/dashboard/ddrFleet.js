@@ -67,7 +67,7 @@ async function fetchActivities(reportIds) {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('activities')
-      .select('report_id, code, hrs')
+      .select('report_id, code, hrs, remarks')
       .in('report_id', reportIds)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
@@ -255,19 +255,20 @@ export async function loadRigTimeDistributionDaily(rigId, from, to) {
   if (!rigId || !from || !to) return { days: [], hasData: false, from, to }
 
   const [codesRes, repRes] = await Promise.all([
-    supabase.from('code_master').select('code, condition'),
+    supabase.from('code_master').select('code, condition, description'),
     supabase.from('reports').select('id, report_date')
       .eq('rig_id', rigId).gte('report_date', from).lte('report_date', to),
   ])
   for (const r of [codesRes, repRes]) if (r.error) throw new Error(r.error.message)
 
-  const condByCode = new Map((codesRes.data || []).map((c) => [c.code, c.condition]))
+  const infoByCode = new Map((codesRes.data || []).map((c) => [c.code, { condition: c.condition, description: c.description }]))
   const reports = repRes.data || []
   const dateByReport = new Map(reports.map((r) => [r.id, r.report_date]))
 
   const byDate = new Map()
   const ensure = (d) => {
-    if (!byDate.has(d)) byDate.set(d, { date: d, RODR: 0, NODR: 0, EBDR: 0, nullCodeHrs: 0 })
+    // _nodr/_ebdr: temp per-code maps that become the nodrItems/ebdrItems tooltip lists.
+    if (!byDate.has(d)) byDate.set(d, { date: d, RODR: 0, NODR: 0, EBDR: 0, nullCodeHrs: 0, _nodr: new Map(), _ebdr: new Map() })
     return byDate.get(d)
   }
   // Seed every reporting day so a day with no classifiable hours still shows.
@@ -278,13 +279,33 @@ export async function loadRigTimeDistributionDaily(rigId, from, to) {
     const d = dateByReport.get(a.report_id)
     if (!d) continue
     const e = ensure(d)
-    const cond = condByCode.get(a.code)
-    if (cond === 'RODR' || cond === 'NODR' || cond === 'EBDR') e[cond] += Number(a.hrs) || 0
+    const info = infoByCode.get(a.code)
+    const cond = info?.condition
+    const hrs = Number(a.hrs) || 0
+    if (cond === 'RODR' || cond === 'NODR' || cond === 'EBDR') e[cond] += hrs
     else if (cond === 'MDR') { /* rig-move — excluded from the RODR/NODR/EBDR distribution */ }
-    else e.nullCodeHrs += Number(a.hrs) || 0 // code null / no condition → surfaced, never dropped
+    else e.nullCodeHrs += hrs // code null / no condition → surfaced, never dropped
+    // Per-day NODR / EBDR breakdown by code (for the trend tooltips: code + remark + hrs).
+    if (cond === 'NODR' || cond === 'EBDR') {
+      const bucket = cond === 'NODR' ? e._nodr : e._ebdr
+      const key = a.code ?? '(unmapped)'
+      const it = bucket.get(key) || { code: a.code ?? null, description: info?.description ?? null, hrs: 0, remark: '', _max: -1 }
+      it.hrs += hrs
+      if (hrs >= it._max && a.remarks) { it.remark = a.remarks; it._max = hrs } // keep the biggest-hrs remark
+      bucket.set(key, it)
+    }
   }
 
-  const days = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+  const toItems = (m) => [...m.values()]
+    .map(({ _max, ...r }) => r)
+    .filter((r) => r.hrs > 0)
+    .sort((a, b) => b.hrs - a.hrs)
+  const days = [...byDate.values()]
+    .map((e) => ({
+      date: e.date, RODR: e.RODR, NODR: e.NODR, EBDR: e.EBDR, nullCodeHrs: e.nullCodeHrs,
+      nodrItems: toItems(e._nodr), ebdrItems: toItems(e._ebdr),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date))
   return { days, hasData: days.length > 0, from, to }
 }
 
