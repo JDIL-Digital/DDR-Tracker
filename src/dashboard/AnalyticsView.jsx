@@ -4,14 +4,14 @@
 //   • Diesel consumption (FuelConsumptionPanel, reused)
 //   • Rig time distribution RODR/NODR/EBDR per day (RigTimeDistributionDaily)
 //   • Well & Location (WellLocationPanel, from the latest DDR in the window)
-//   • Portable Water  — placeholder (coming next)
-//   • Planned vs Actual — placeholder (coming next)
+//   • Portable Water (made vs consumed, WaterPanel)
+//   • Depth vs Days (current well: depth curve + NPT markers + casing, DepthVsDaysPanel)
 // Every panel is wrapped in <Expandable> (click to enlarge). READ-ONLY; nothing is
 // invented — absent data shows honest empty states.
 import { useEffect, useMemo, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { loadRigsForPicker } from './settings'
-import { loadRigTimeDistributionDaily, loadRigFuelDaily, loadRigWellLocation, loadRigWaterDaily, loadRigDepthVsDays } from './ddrFleet'
+import { loadRigTimeDistributionDaily, loadRigFuelDaily, loadRigWellLocation, loadRigWaterDaily, loadRigDepthSeries } from './ddrFleet'
 import { todayISO, prettyDate, shiftDate } from './format'
 import { LoadError } from './LoadState'
 import TimeWindowSelector from './TimeWindowSelector'
@@ -20,7 +20,7 @@ import FuelConsumptionPanel from './FuelConsumptionPanel'
 import RigTimeDistributionDaily from './RigTimeDistributionDaily'
 import WellLocationPanel from './WellLocationPanel'
 import WaterPanel from './WaterPanel'
-import PlannedVsActualPanel from './PlannedVsActualPanel'
+import DepthVsDaysPanel from './DepthVsDaysPanel'
 
 function computeRange(mode, cs, ce) {
   const end = mode === 'custom' ? ce : todayISO()
@@ -64,7 +64,7 @@ export default function AnalyticsView() {
       loadRigTimeDistributionDaily(rigId, range.start, range.end),
       loadRigWellLocation(rigId, range.start, range.end),
       loadRigWaterDaily(rigId, range.start, range.end),
-      loadRigDepthVsDays(rigId), // whole-well plan vs actual — not window-scoped
+      loadRigDepthSeries(rigId), // current well's depth curve + NPT + casing — not window-scoped
     ])
       .then(([fuel, dist, well, water, depth]) => { if (!cancelled) setData({ fuel, dist, well, water, depth }) })
       .catch((e) => { if (!cancelled) setError(e.message) })
@@ -114,11 +114,11 @@ export default function AnalyticsView() {
       ) : (
         // 3-per-row grid (collapses to 2 then 1 as the viewport narrows).
         // Order L→R, top→bottom:
-        //   Row 1: Planned vs Actual | Rig Time Distribution | Diesel Consumption
+        //   Row 1: Depth vs Days | Rig Time Distribution | Diesel Consumption
         //   Row 2: Portable Water    | Well & Location       | (empty 6th cell)
         <div className="analytics-grid">
           <Expandable>
-            <PlannedVsActualPanel rigName={rigName} data={data?.depth} loading={loading} />
+            <DepthVsDaysPanel rigName={rigName} data={data?.depth} loading={loading} />
           </Expandable>
 
           <Expandable>
