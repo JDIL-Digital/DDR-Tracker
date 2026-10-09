@@ -1868,6 +1868,26 @@ body {
 }
 .water-b { width: 45%; min-width: 2px; border-radius: 3px 3px 0 0; }
 
+/* ---- Analytics: Depth vs Days panel --------------------------------------- */
+.dvd-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 6px 0 12px; }
+.dvd-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; cursor: pointer; }
+.dvd-switch input { cursor: pointer; }
+.dvd-casing-lbl { fill: var(--blue); font-size: 9px; }
+.ilt-legend .ldot.dvd-ring { background: transparent; border: 1.8px solid var(--blue); box-sizing: border-box; }
+/* Enlarged-only hover tooltip */
+.dvd-chart-wrap { position: relative; }
+.dvd-tip {
+  position: absolute; z-index: 6; max-width: 250px;
+  background: var(--card); border: 1px solid var(--border2); border-radius: 9px;
+  padding: 9px 11px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  pointer-events: none; /* never steals the hover from the marker */
+  font-size: 12px; color: var(--text);
+}
+.dvd-tip .tip-h { font-weight: 700; margin-bottom: 3px; }
+.dvd-tip .tip-meta { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+.dvd-tip .tip-reason { color: var(--text); line-height: 1.42; white-space: normal; overflow-wrap: anywhere; }
+.dvd-tip .tip-approx { color: var(--amber); font-size: 11px; margin-bottom: 4px; }
+
 /* ---- Analytics: Well & Location key/value grid ---------------------------- */
 .wl-grid { display: flex; flex-direction: column; gap: 0; margin: 2px 0 0; }
 .wl-row { display: flex; justify-content: space-between; gap: 18px; padding: 10px 0; border-bottom: 1px solid var(--border); }
