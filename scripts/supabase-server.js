@@ -145,6 +145,8 @@ export async function saveReport(data, { validationPassed }) {
     downtime_cum_hrs: hv('downtime_cum_hrs'),
     daily_cost: hv('daily_cost'),
     cumulative_cost: hv('cumulative_cost'),
+    // rig-console extra sections (migration 0026): one jsonb blob, additive.
+    extra: data.extra ?? null,
     extraction_status: extractionStatus,
     raw_extract: data,
     activities: activityRows,
