@@ -340,6 +340,12 @@ function FleetKpiTiles({ detail }) {
   const bop = ex.bop || {}
   const { shoe, liner } = casingPoints(ex)
   const mini = (v) => (v == null ? NR : <b>{v}</b>) // pob_split: 0 is valid, null = absent
+  // Combine source fields into a displayed bucket: null only if ALL sources are absent
+  // (→ "— not reported"); otherwise sum, treating a missing source as 0.
+  const bucket = (...vals) => (vals.every((v) => v == null) ? null : vals.reduce((s, v) => s + (Number(v) || 0), 0))
+  // POB buckets: ONGC = ongc + ongc_services; SRVCS = jindal_services; JDIL; CATR.
+  // client_visitors is NOT shown as a bucket (still counts toward reports.pob_total).
+  const ongcBucket = bucket(pob.ongc, pob.ongc_services)
 
   return (
     <>
@@ -357,8 +363,8 @@ function FleetKpiTiles({ detail }) {
         <div className="fkpi-num">{has(detail?.pob_total) ? <>{detail.pob_total}<span className="fkpi-unit"> SOULS</span></> : NR}</div>
         <div className="fkpi-line">LIFEBOATS {NR}</div>
         <div className="fkpi-mini">
-          <span>ONGC {mini(pob.ongc)}</span>
-          <span>SRVCS {mini(pob.ongc_services)}</span>
+          <span>ONGC {mini(ongcBucket)}</span>
+          <span>SRVCS {mini(pob.jindal_services)}</span>
           <span>JDIL {mini(pob.jdil)}</span>
           <span>CATR {mini(pob.catering)}</span>
         </div>
