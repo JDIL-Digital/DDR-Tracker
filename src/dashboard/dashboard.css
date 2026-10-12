@@ -1972,9 +1972,9 @@ body {
   position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
   border-right: 1px solid var(--track); overflow: hidden; box-sizing: border-box; padding: 0 5px;
 }
-/* label sits ON the bright per-code segment fill (same color in both themes), so its
-   contrast color is fixed to the fill, not a theme surface. */
-.fday-seg-lbl { font-size: 9.5px; color: #0b0f14; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+/* label sits ON a condition-colored segment fill (green/amber/red/blue, which differ per
+   theme), so it's white with a dark shadow for legibility on any of them, both themes. */
+.fday-seg-lbl { font-size: 9.5px; color: #fff; font-weight: 700; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 .fday-axis { position: relative; height: 16px; margin-top: 4px; }
 .fday-tick { position: absolute; transform: translateX(-50%); font-size: 9.5px; color: var(--dim); }
 .fday-tick:first-child { transform: none; }
