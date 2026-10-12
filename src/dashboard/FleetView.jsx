@@ -381,7 +381,12 @@ function FleetKpiTiles({ detail }) {
 // Zone E — 24-hour time distribution & IADC operation codes for the selected rig + date.
 // Distinct per-code colors (stable within the day), a legend sorted by hours, and a single
 // 00:00→24:00 timeline of proportional activity segments. All from the activities log.
-const E_PALETTE = ['#1fb55e', '#3e8fe0', '#e7a53c', '#f04a42', '#7b3ff2', '#17a2a2', '#d81b8c', '#c9a227', '#5bc0eb', '#9b8cff', '#e8713c', '#5b6b7a']
+// Color the timeline by IADC condition — the SAME semantic scheme the F table + Analytics
+// trends use (via the --green/--amber/--red/--blue/--dim theme tokens), so a breakdown code
+// (EBDR) always reads RED, never a rank-based color. operating=green · non-operating=amber ·
+// equipment breakdown/NPT=red · rig move=blue · unmapped/null=grey.
+const COND_COLOR = { RODR: 'var(--green)', NODR: 'var(--amber)', EBDR: 'var(--red)', MDR: 'var(--blue)' }
+const colorForCond = (cond) => COND_COLOR[cond] || 'var(--dim)'
 const toMin = (t) => {
   const m = String(t || '').match(/^(\d{1,2}):(\d{2})/)
   if (!m) return null
@@ -407,16 +412,15 @@ function FleetDayTimeline({ rig, date, data }) {
 
   const acts = data.activities
   const total = data.total || acts.reduce((s, a) => s + (a.hrs || 0), 0)
-  // Stable color per code (by first appearance in the sorted-by-hours legend order).
+  // Group by code for the legend; each code carries its IADC condition (drives color).
   const byCode = new Map()
   for (const a of acts) {
     const k = a.code ?? '(unmapped)'
-    const e = byCode.get(k) || { code: a.code, description: a.description, hrs: 0 }
+    const e = byCode.get(k) || { code: a.code, description: a.description, condition: a.condition ?? null, hrs: 0 }
     e.hrs += a.hrs || 0
     byCode.set(k, e)
   }
   const legend = [...byCode.entries()].map(([k, v]) => ({ key: k, ...v })).sort((a, b) => b.hrs - a.hrs)
-  const colorOf = new Map(legend.map((l, i) => [l.key, E_PALETTE[i % E_PALETTE.length]]))
 
   const ticks = [0, 3, 6, 9, 12, 15, 18, 21, 24]
 
@@ -429,7 +433,7 @@ function FleetDayTimeline({ rig, date, data }) {
       <div className="fday-legend">
         {legend.map((l) => (
           <span className="fday-leg" key={l.key}>
-            <i className="fday-dot" style={{ background: colorOf.get(l.key) }} />
+            <i className="fday-dot" style={{ background: colorForCond(l.condition) }} />
             Code {l.code ?? '—'}: {l.description || '(unmapped)'} ({fmt1(l.hrs)} Hrs / {total > 0 ? Math.round((l.hrs / total) * 100) : 0}%)
           </span>
         ))}
@@ -449,7 +453,7 @@ function FleetDayTimeline({ rig, date, data }) {
           return (
             <div
               key={i} className="fday-seg"
-              style={{ left: `${left}%`, width: `${width}%`, background: colorOf.get(a.code ?? '(unmapped)') }}
+              style={{ left: `${left}%`, width: `${width}%`, background: colorForCond(a.condition) }}
               title={`${pad2(sH)}:${pad2(start % 60)}–${pad2(eH)}:00 · [${a.code ?? '—'}] ${a.remarks || a.description || ''} · ${fmt1(a.hrs)} h`}
             >
               {wide && <span className="fday-seg-lbl">{pad2(sH)}-{pad2(eH)} {shortOp(a)}</span>}
