@@ -7,6 +7,9 @@ export default function TopBar({ theme, onToggleTheme, onSearchNavigate = () => 
   return (
     <div className="topbar">
       <SearchBar onNavigate={onSearchNavigate} />
+      {/* Slot for a view to inject content beside the search bar (e.g. the Fleet
+          single-rig header strip, portaled in from FleetView). Empty on other views. */}
+      <div className="topbar-slot" id="topbar-slot" />
       <div className="right">
         <button
           type="button"
