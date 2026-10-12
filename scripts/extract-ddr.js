@@ -410,6 +410,157 @@ function addDaysISO(iso, n) {
   return d.toISOString().slice(0, 10)
 }
 
+// =============================================================================
+// CALL #2 — rig-console EXTRA sections, extracted in a SEPARATE API call so that
+// CALL #1 (header/activities/inventory) stays byte-for-byte the original. Its schema
+// is a single non-nullable string (`extra_json`) → tiny grammar, zero unions, and it
+// cannot perturb call #1. Any failure is swallowed by the caller (extractDDR) → the
+// report's existing data is always returned intact.
+// =============================================================================
+const EXTRA_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { extra_json: { type: 'string' } },
+  required: ['extra_json'],
+}
+
+function buildExtraPrompt(cellLines) {
+  return [
+    'You are extracting the RIG-CONSOLE EXTRA sections from ONE daily drilling report (DDR).',
+    'The report is a lossless dump of every non-empty spreadsheet cell, one per line, as',
+    '`SheetName!CellRef = value`. Infer meaning from labels and nearby cells, not fixed positions.',
+    '',
+    'Return a SINGLE field `extra_json`: a STRING containing a JSON object with EXACTLY this shape',
+    '(a string of JSON — not a nested object):',
+    '  {"metocean":{"wind":"","dir":"","swell":"","baro":""},',
+    '   "bop":{"accumulator_psi":"","manifold_psi":"","status":"","bop_test_date":"","function_test_date":""},',
+    '   "hse":{"incidents":"","last_safety_meeting":""},',
+    '   "pob_split":{"ongc":"","ongc_services":"","jindal_services":"","jdil":"","catering":"","client_visitors":"","total":""},',
+    '   "casing":[{"section":"","od":"","grade_wt":"","joints":"","setting_md":"","setting_tvd":"","liner_top_md":"","liner_top_tvd":"","mw_run":""}],',
+    '   "pumps":[{"pump_no":"","liner":"","spm":"","gpm":"","pressure_psi":""}],',
+    '   "mud":[{"time":"","mwt":"","vis":"","pv_yp":"","r6_r3":"","gel":"","hthp":"","owr":"","ex_lime":"","chloride":"","solid":"","es":"","wps":"","ph":""}]}',
+    '',
+    'CRITICAL — inside extra_json values NEVER use the " (inch / double-quote) character: it',
+    'would break the JSON. Write every size with "in" instead — e.g. 30 in, 20 in, 13-3/8 in,',
+    '9-5/8 in, 7 in, 6.5 in, 21-1/4 in.',
+    'Every value is a STRING; use "" when the cell is blank — NEVER guess. Keep values roughly',
+    'as written (ranges/units such as "4-4.5M" or "3000 PSI" are fine). Emit one casing object',
+    'per casing row that has data (an OD or a depth), one pumps object per pump row, one mud',
+    'object per time row; use [] for a table that is entirely absent. If nothing is present at',
+    'all, return "" for extra_json.',
+    '',
+    'LABEL hints:',
+    '  METOCEAN: wind <- "Wind:Kts."   dir <- "Dir:"   swell <- "Swell: M"   baro <- "BARO(mb)"',
+    '  BOP/HSE: accumulator_psi <- "Accumulator Press"   manifold_psi <- "MANIFOLD Press"',
+    '    status <- "BOP STATUS"   bop_test_date <- "BOP TEST" date   function_test_date <- "FUNCTION TEST BOP" date',
+    '    incidents <- "Incidents"   last_safety_meeting <- "Safety Com.Meeting" date',
+    '  POB SPLIT: ongc <- "ONGC"   ongc_services <- "ONGC -Services"   jindal_services <- "Jindal-Services"',
+    '    jdil <- "JDIL"   catering <- "Catering"   client_visitors <- "Client -Visitors"   total <- "TOTAL"',
+    '  CASING table: section <- row label (Conductor/Surface Casing/Intermediate/Production casing/Liner)',
+    '    od <- "OD"   grade_wt <- "Gr & Wt(PPF)"   joints <- "NO.OF JOINTS"',
+    '    setting_md <- "Setting Depth - RKB (M)" MD   setting_tvd <- that row\'s TVD',
+    '    liner_top_md <- "Liner Top - RKB (M)" MD   liner_top_tvd <- that row\'s TVD   mw_run <- "MW when Run-PPG"',
+    '  MUD PUMPS table ("PUMP DATA"): pump_no <- "Pump No."   liner <- "Liner"   spm <- "SPM"',
+    '    gpm <- "GPM"   pressure_psi <- "Pressure-PSI".  Ignore the adjacent GASES table.',
+    '  MUD RHEOLOGY table ("WELL FLUID: SOBM", headed "Time"): time <- "Time"   mwt <- "M/Wt-PPG"',
+    '    vis <- "VIS"   pv_yp <- "PV/YP"   r6_r3 <- "R6/R3"   gel <- "GEL0/GEL10"   hthp <- "HTHP F/L (CC)"',
+    '    owr <- "OWR"   ex_lime <- "EX LIME (PPB)"   chloride <- "CHLORIDE(MG/L)"   solid <- "SOLID"',
+    '    es <- "ES (V)"   wps <- "WPS (PPM)"   ph <- "PH"',
+    '',
+    '--- BEGIN CELL DUMP ---',
+    cellLines.join('\n'),
+    '--- END CELL DUMP ---',
+  ].join('\n')
+}
+
+// Conservative JSON repair for extra_json: escape stray INNER double-quotes (an unescaped
+// inch mark, e.g. 21-1/4" X 2M). A " inside a string is the CLOSING delimiter only when the
+// next non-space char is a JSON structural token (:,}] or end); otherwise it is inner and we
+// escape it. Valid JSON never has a string value immediately followed by a letter/digit, so
+// this cannot corrupt valid structure. Returns { fixed, repaired }.
+export function repairInnerQuotes(s) {
+  let out = ''
+  let inStr = false
+  let repaired = false
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (!inStr) {
+      out += c
+      if (c === '"') inStr = true
+      continue
+    }
+    if (c === '\\') { out += c + (s[i + 1] ?? ''); i++; continue }
+    if (c === '"') {
+      let j = i + 1
+      while (j < s.length && /\s/.test(s[j])) j++
+      const next = s[j]
+      if (next === ':' || next === ',' || next === '}' || next === ']' || next === undefined) {
+        out += c; inStr = false
+      } else {
+        out += '\\"'; repaired = true
+      }
+      continue
+    }
+    out += c
+  }
+  return { fixed: out, repaired }
+}
+
+// Parse the inner extra_json string tolerantly: direct parse, else repair-then-parse, else {}.
+function parseExtraJson(rawField) {
+  const raw = typeof rawField === 'string' ? rawField : ''
+  if (!raw.trim()) return {}
+  try {
+    return JSON.parse(raw)
+  } catch {
+    const { fixed, repaired } = repairInnerQuotes(raw)
+    if (repaired) console.error('[extract-ddr] extra_json needed inner-quote repair (model emitted an unescaped ")')
+    try { return JSON.parse(fixed) } catch { return {} }
+  }
+}
+
+// Coerce a parsed extra object into the stable console shape. Values kept roughly as written
+// (ranges/units as text; blank/"nil" -> null); POB split are counts -> ints; empty rows dropped.
+function coerceExtra(parsed) {
+  const p = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  const coObj = (o, fn) =>
+    o && typeof o === 'object' && !Array.isArray(o)
+      ? Object.fromEntries(Object.keys(o).map((k) => [k, fn(o[k])]))
+      : {}
+  const coRows = (arr, fn) =>
+    (Array.isArray(arr) ? arr : [])
+      .map((r) => coObj(r, fn))
+      .filter((r) => Object.values(r).some((v) => v != null))
+  return {
+    metocean: coObj(p.metocean, coerceText),
+    bop: coObj(p.bop, coerceText),
+    hse: coObj(p.hse, coerceText),
+    pob_split: coObj(p.pob_split, coerceInt),
+    casing: coRows(p.casing, coerceText),
+    pumps: coRows(p.pumps, coerceText),
+    mud: coRows(p.mud, coerceText),
+  }
+}
+
+// Run CALL #2 and return the coerced `extra`. Throws only on an API/parse-of-outer failure,
+// which extractDDR catches (so call #1's result is never affected).
+async function extractExtra(client, cellLines) {
+  const resp = await client.messages.create({
+    model: MODEL,
+    max_tokens: 4000,
+    temperature: 0,
+    system:
+      'You are a meticulous data-extraction engine for oil & gas daily drilling reports. ' +
+      'Return only what the source supports; never fabricate values.',
+    messages: [{ role: 'user', content: buildExtraPrompt(cellLines) }],
+    output_config: { format: { type: 'json_schema', schema: EXTRA_SCHEMA } },
+  })
+  const text = resp.content.find((b) => b.type === 'text')?.text
+  if (!text) throw new Error('No text block in extra (call #2) response.')
+  const rawField = JSON.parse(text).extra_json // the structured string field
+  return coerceExtra(parseExtraJson(rawField))
+}
+
 // --- Core extraction (reusable) ---------------------------------------------
 export async function extractDDR(inputFile) {
   loadEnvLocal()
@@ -476,6 +627,17 @@ export async function extractDDR(inputFile) {
   }
   // STORE ONLY the own-day block — the next report persists the next morning as its own day.
   result.activities = ownDay
+
+  // --- CALL #2 (SEPARATE, fully isolated): rig-console EXTRA sections ----------
+  // call #1's `result` above is already complete; call #2 only ATTACHES result.extra.
+  // Any failure here (API error, bad response) is swallowed so the report's existing
+  // data is returned intact — call #2 can NEVER affect call #1's output.
+  try {
+    result.extra = await extractExtra(client, cellLines)
+  } catch (e) {
+    result.extra = {}
+    result.extra_error = e?.message || String(e)
+  }
 
   return { result, codes, roster, cellCount: cellLines.length }
 }
