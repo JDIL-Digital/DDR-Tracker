@@ -728,6 +728,7 @@ body {
 .topbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   padding: 15px 26px;
   border-bottom: 1px solid var(--border);
@@ -736,6 +737,12 @@ body {
   background: var(--bg);
   z-index: 5;
 }
+/* Slot for a view's injected strip beside the search bar. Sits inline when there's
+   room; when search + strip + right controls can't fit, it wraps to its own full-width
+   line directly under the top bar (never squashed/clipped, no horizontal scroll). */
+.topbar-slot { flex: 1 1 340px; min-width: 260px; display: flex; }
+.topbar-slot:empty { display: none; } /* no gap on views that don't use it */
+.topbar-slot .fleet-strip { margin: 0; flex: 1 1 auto; min-width: 0; }
 .search-wrap {
   position: relative;
   flex: 1;
@@ -1905,3 +1912,136 @@ body {
   background: var(--panel); border: 1px dashed var(--border2); color: var(--muted);
   font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px;
 }
+
+/* Fleet — single-rig header strip (Section A). Deliberate dark accent bar even in
+   light mode; monospace/uppercase; LTI value in Jindal green. */
+.fleet-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  background: var(--card); color: var(--text);
+  border: 1px solid var(--border); border-radius: 9px;
+  padding: 12px 16px; margin: 14px 0;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12.5px; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.fleet-strip .fs-item { color: var(--muted); }
+.fleet-strip .fs-item b { color: var(--text); font-weight: 700; margin-left: 4px; }
+.fleet-strip .fs-sep { color: var(--dim); }
+.fleet-strip .fs-lti { color: var(--green); } /* Jindal green status — theme-tuned for contrast */
+.fleet-strip .fleet-strip-empty { color: var(--amber); font-weight: 600; }
+
+/* Fleet — Zone C dark KPI tiles (selected rig + date). Dark tiles even in light mode;
+   mono/uppercase // labels; large bright readout; Jindal green for the LTI-free value.
+   Scoped under .fleet-kpi-row / .fkpi so nothing leaks into other tabs. */
+.fleet-kpi-row {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 14px 0;
+}
+.fkpi {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px;
+  color: var(--text); min-width: 0;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+.fkpi-msg { color: var(--muted); letter-spacing: 0.06em; }
+.fkpi-label { font-size: 10.5px; letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase; margin-bottom: 10px; }
+.fkpi-num { font-size: 32px; font-weight: 700; line-height: 1.05; color: var(--text); }
+.fkpi-num.green { color: var(--green); } /* LTI-free: Jindal green status, theme-tuned */
+.fkpi-num .fkpi-unit { font-size: 13px; font-weight: 500; color: var(--muted); }
+.fkpi-line { font-size: 11.5px; color: var(--muted); margin-top: 10px; letter-spacing: 0.03em; }
+.fkpi-line b { color: var(--text); font-weight: 700; }
+.fkpi-mini { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+.fkpi-mini b { color: var(--text); font-weight: 700; }
+.fkpi-nr { color: var(--dim); font-style: normal; font-size: 0.92em; letter-spacing: 0.02em; }
+@media (max-width: 860px) { .fleet-kpi-row { grid-template-columns: 1fr; } }
+
+/* Fleet — Zone E: 24-hour time distribution & IADC codes. Dark panel, mono/uppercase,
+   per-code colored legend + a proportional 00:00→24:00 timeline. Scoped under .fday. */
+.fday {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 14px 0;
+  color: var(--text); font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+.fday-h { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--text); text-transform: uppercase; }
+.fday-sub { font-size: 10.5px; color: var(--muted); letter-spacing: 0.05em; margin: 4px 0 12px; }
+.fday-msg { font-size: 12px; color: var(--muted); letter-spacing: 0.05em; padding: 10px 0; }
+.fday-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 14px; }
+.fday-leg { font-size: 11px; color: var(--text); letter-spacing: 0.02em; display: inline-flex; align-items: center; }
+.fday-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 7px; flex: none; }
+.fday-track {
+  position: relative; height: 40px; background: var(--track); border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden;
+}
+.fday-seg {
+  position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
+  border-right: 1px solid var(--track); overflow: hidden; box-sizing: border-box; padding: 0 5px;
+}
+/* label sits ON the bright per-code segment fill (same color in both themes), so its
+   contrast color is fixed to the fill, not a theme surface. */
+.fday-seg-lbl { font-size: 9.5px; color: #0b0f14; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.fday-axis { position: relative; height: 16px; margin-top: 4px; }
+.fday-tick { position: absolute; transform: translateX(-50%); font-size: 9.5px; color: var(--dim); }
+.fday-tick:first-child { transform: none; }
+.fday-tick:last-child { transform: translateX(-100%); }
+
+/* Fleet — Zone F: 24-hour chronological operations sequence table (parsed DDR, not live).
+   Dark panel; code/status badges colored by IADC condition. Scoped under .fseq. */
+.fseq {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 14px 0;
+  color: var(--text); font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+.fseq-h { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: var(--text); text-transform: uppercase; }
+.fseq-sub { font-size: 10.5px; color: var(--muted); letter-spacing: 0.06em; margin: 4px 0 12px; text-transform: uppercase; }
+.fseq-msg { font-size: 12px; color: var(--muted); letter-spacing: 0.05em; padding: 10px 0; }
+.fseq-scroll { overflow-x: auto; }
+.fseq-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.fseq-table th {
+  text-align: left; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); font-weight: 600; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.fseq-table th.num, .fseq-table td.num { text-align: right; }
+.fseq-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: top; }
+.fseq-table tbody tr:hover { background: var(--hover); }
+.fseq-time { white-space: nowrap; color: var(--text); }
+.fseq-act { white-space: normal; line-height: 1.45; min-width: 280px; color: var(--text); }
+/* code + status badges, colored by IADC condition (semantic accents — kept across themes) */
+.fseq-code, .fseq-status {
+  display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+  padding: 2px 7px; border-radius: 5px; white-space: nowrap;
+}
+.fseq-code { background: var(--panel); color: var(--text); border: 1px solid transparent; }
+.fseq-code.cond-RODR { border-color: var(--green); color: var(--green); }
+.fseq-code.cond-NODR { border-color: var(--amber); color: var(--amber); }
+.fseq-code.cond-EBDR { border-color: var(--red); color: var(--red); }
+.fseq-code.cond-MDR { border-color: var(--blue); color: var(--blue); }
+.fseq-code.cond-none { border-color: var(--dim); color: var(--muted); }
+.fseq-status.st-op { background: rgba(0, 141, 41, 0.16); color: var(--green); }
+.fseq-status.st-nonop { background: rgba(224, 138, 0, 0.16); color: var(--amber); }
+.fseq-status.st-bd { background: rgba(237, 29, 19, 0.16); color: var(--red); }
+.fseq-status.st-move { background: rgba(62, 143, 224, 0.16); color: var(--blue); }
+.fseq-status.st-ai { background: rgba(123, 63, 242, 0.18); color: #7b3ff2; }
+.fseq-status.st-none { background: var(--panel); color: var(--muted); }
+
+/* Fleet — chart + F ops-sequence side-by-side row. Two equal columns that can shrink
+   (min-width:0 so neither overflows → no horizontal page scroll); stacks on narrow.
+   The F table scrolls inside its own panel when taller than the chart. */
+.fleet-split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch; }
+.fleet-split > * { min-width: 0; margin: 0; }
+.fleet-split .fseq-scroll { max-height: 560px; overflow-y: auto; }
+@media (max-width: 1024px) { .fleet-split { grid-template-columns: 1fr; } }
+
+/* Make the Rig Time Distribution chart FILL its card in the split row: the panel becomes a
+   flex column so the plot grows to the equal-height row, and the 6 rig groups spread edge
+   to edge. Scoped to .fleet-split so the chart's default layout elsewhere is untouched. */
+.fleet-split > .panel { display: flex; flex-direction: column; }
+.fleet-split .dt-chart { flex: 1 1 auto; gap: 10px; overflow-x: hidden; align-items: stretch; justify-content: space-between; }
+.fleet-split .dt-group { flex: 1 1 0; min-width: 0; justify-content: flex-end; }
+.fleet-split .dt-bars { height: auto; flex: 1 1 auto; min-height: 150px; gap: 8px; }
+.fleet-split .dt-barwrap { width: auto; flex: 1 1 0; max-width: 42px; }
+
+/* Fleet — unified 4×2 top grid: 5 fleet KPI cards + 3 single-rig tiles share one grid,
+   equal width (minmax(0,1fr)) and equal height (grid-auto-rows:1fr + stretch), so the
+   taller C tiles set the row height and the shorter KPI cards fill. Responsive 4→2→1. */
+.fleet-top-grid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 1fr; gap: 14px; margin: 14px 0; align-items: stretch;
+}
+.fleet-top-grid > .kpi, .fleet-top-grid > .fkpi { height: 100%; min-width: 0; margin: 0; }
+@media (max-width: 1100px) { .fleet-top-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .fleet-top-grid { grid-template-columns: 1fr; } }

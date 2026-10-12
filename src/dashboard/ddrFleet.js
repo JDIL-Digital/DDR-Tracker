@@ -239,6 +239,71 @@ export async function loadRigCards(date) {
   })
 }
 
+// One rig's report row for a date, by rig NAME (case/punctuation-insensitive), for the
+// Fleet single-rig KPI tiles. Returns the existing columns the tiles need + the `extra`
+// jsonb (casing / pob_split / bop). hasReport=false when that rig filed no DDR that date.
+export async function loadRigReportByName(rigName, date) {
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigName || !date) return { hasReport: false, extra: {} }
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const { data: rigs, error: rErr } = await supabase.from('rigs').select('id, name')
+  if (rErr) throw new Error(rErr.message)
+  const rig = (rigs || []).find((r) => norm(r.name) === norm(rigName))
+  if (!rig) return { hasReport: false, extra: {} }
+  const { data, error } = await supabase
+    .from('reports')
+    .select('well_no, report_no, depth_md_m, pob_total, lti_days, extra')
+    .eq('rig_id', rig.id).eq('report_date', date).limit(1)
+  if (error) throw new Error(error.message)
+  const r = (data || [])[0]
+  if (!r) return { hasReport: false, extra: {} }
+  return {
+    hasReport: true,
+    well_no: r.well_no ?? null,
+    report_no: r.report_no ?? null,
+    depth_md_m: r.depth_md_m ?? null,
+    pob_total: r.pob_total ?? null,
+    lti_days: r.lti_days ?? null,
+    extra: r.extra && typeof r.extra === 'object' ? r.extra : {},
+  }
+}
+
+// One rig's own-day activity log for a date (by rig NAME), joined to code_master for
+// description/condition — drives the Fleet 24-hour time-distribution zone. No `extra`
+// dependency (works for every rig). hasActivities=false when the day has no log.
+export async function loadRigDayActivities(rigName, date) {
+  const EMPTY = { hasActivities: false, activities: [], total: 0 }
+  if (!supabase) throw new Error('Supabase is not configured (check .env.local VITE_ vars).')
+  if (!rigName || !date) return EMPTY
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const { data: rigs, error: rErr } = await supabase.from('rigs').select('id, name')
+  if (rErr) throw new Error(rErr.message)
+  const rig = (rigs || []).find((r) => norm(r.name) === norm(rigName))
+  if (!rig) return EMPTY
+  const { data: reps, error: repErr } = await supabase
+    .from('reports').select('id').eq('rig_id', rig.id).eq('report_date', date).limit(1)
+  if (repErr) throw new Error(repErr.message)
+  const rep = (reps || [])[0]
+  if (!rep) return EMPTY
+
+  const [actsRes, codesRes] = await Promise.all([
+    supabase.from('activities')
+      .select('seq, time_from, time_to, hrs, code, raw_code, remarks')
+      .eq('report_id', rep.id).order('time_from', { ascending: true }),
+    supabase.from('code_master').select('code, description, condition'),
+  ])
+  for (const r of [actsRes, codesRes]) if (r.error) throw new Error(r.error.message)
+  const info = new Map((codesRes.data || []).map((c) => [c.code, c]))
+  const activities = (actsRes.data || []).map((a) => ({
+    time_from: a.time_from, time_to: a.time_to, hrs: Number(a.hrs) || 0,
+    code: a.code, raw_code: a.raw_code, remarks: a.remarks || '',
+    description: info.get(a.code)?.description ?? null,
+    condition: info.get(a.code)?.condition ?? null,
+  }))
+  const total = activities.reduce((s, a) => s + a.hrs, 0)
+  return { hasActivities: activities.length > 0, activities, total }
+}
+
 // ---------------------------------------------------------------------------
 // Analytics tab (SINGLE-RIG) loaders. These are deliberately separate from the
 // Fleet loaders above — loadRigTimeDistribution (Fleet, all rigs, range-cumulative)
