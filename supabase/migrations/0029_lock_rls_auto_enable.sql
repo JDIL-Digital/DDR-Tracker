@@ -1,0 +1,22 @@
+-- 0029_lock_rls_auto_enable.sql
+-- Security-advisor fix (Tier-2): anon/authenticated have EXECUTE on
+-- public.rls_auto_enable().
+--
+-- WHAT IT IS: rls_auto_enable() is an EVENT-TRIGGER function, fired automatically
+-- by the 'ensure_rls' event trigger on ddl_command_end (confirmed live + enabled).
+-- Postgres fires an event-trigger function AS THE OWNER on every qualifying DDL
+-- statement — no user role ever calls it directly, and by the event-trigger
+-- contract it takes ZERO arguments (returns event_trigger). So the correct,
+-- unambiguous signature to target is public.rls_auto_enable() (no args).
+--
+-- WHAT THIS CHANGE DOES: removes the default/user EXECUTE grants only. This is
+-- PURE HARDENING — it does NOT drop, disable, or alter the function or the
+-- 'ensure_rls' event trigger. The trigger keeps firing rls_auto_enable() as the
+-- owner on DDL, so newly created tables still auto-get RLS exactly as before.
+-- Revoking EXECUTE from user roles has no effect on owner-invoked trigger firing
+-- (EXECUTE is only checked for direct callers, which no longer exist here).
+--
+-- Safe to re-run. ⚠️ Confirm the Supabase project is "DDR-Tracker"
+-- (edrmbzcqffatjnommfcc), NOT "JDIL-Navigation", before running.
+
+revoke execute on function public.rls_auto_enable() from public, anon, authenticated;
