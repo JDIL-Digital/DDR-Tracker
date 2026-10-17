@@ -24,6 +24,7 @@ import { getGmailClient, getMessageFull } from './gmail-auth.js'
 import { getServerClient } from './supabase-server.js'
 import { classifyMessage, normRig } from './dmr-match.js'
 import { extractDMR, statusFor, saveExtraction } from './extract-dmr.js'
+import { runWithLogging } from './lib/run-logger.js'
 
 const BUCKET = 'maintenance-reports'
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -108,6 +109,8 @@ async function main() {
   console.log(`Found   : ${matched.length} matched DMR(s), ${excludedCount} excluded, ${candidateIds.length} scanned\n`)
 
   const results = []       // { rig, date, action }
+  let reportsSaved = 0     // heartbeat: count of new reports ingested this run
+  const itemFailures = []  // heartbeat: items that FAILED to parse/save (→ 'partial')
   const skippedProcessed = []
   const flagged = []
 
@@ -165,10 +168,11 @@ async function main() {
             reportId = re.data?.id; status = re.data?.extraction_status; action = 'found existing (race)'
           } else throw new Error(`row insert failed: ${ins.error.message}`)
         } else {
-          reportId = ins.data.id; status = 'uploaded'; action = `INGESTED (${buf.length} bytes)`
+          reportId = ins.data.id; status = 'uploaded'; action = `INGESTED (${buf.length} bytes)`; reportsSaved++
         }
       } catch (e) {
         flagged.push({ label, reason: e.message })
+        itemFailures.push({ rig: c.rig, date: c.dateISO, message_id: c.id, reason: `ingest failed: ${truncate(e.message, 120)}` })
         continue
       }
     } else {
@@ -190,6 +194,7 @@ async function main() {
             // Non-destructive: mark needs_review, keep going. Never wipe good data.
             await supabase.from('maintenance_reports').update({ extraction_status: 'needs_review' }).eq('id', reportId)
             action += ` -> extraction FAILED, set needs_review (${truncate(e.message, 60)})`
+            itemFailures.push({ rig: c.rig, date: c.dateISO, message_id: c.id, reason: `extraction failed: ${truncate(e.message, 120)}` })
           }
         }
       } else {
@@ -236,10 +241,24 @@ async function main() {
   }
 
   console.log(doSave ? '\nSAVE run complete.' : '\nDRY RUN — nothing downloaded/written. Add --save (and --extract) to act.')
+
+  // Summary for the run-logger wrapper (additive — prints nothing, so the happy
+  // path is byte-identical). reportsSaved = new maintenance_reports rows created.
+  return {
+    emailsFound: matched.length,
+    reportsSaved,
+    scanHealthy,
+    failedItems: itemFailures, // >=1 → run-logger records 'partial' + alerts
+    details: { matched: matched.length, flagged: flagged.length, excluded: excludedCount, scanned: candidateIds.length, fetchFailed, reportsSaved, itemFailures: itemFailures.length },
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  main().catch((err) => {
+  // Wrap the run: write exactly one run_log heartbeat row and alert on failure.
+  // Logging/alerting is gated to real (--save) runs so a dry run still writes
+  // NOTHING (preserves the "DRY RUN — nothing downloaded/written" contract above).
+  const doSave = process.argv.slice(2).includes('--save')
+  runWithLogging('ingest-dmr', main, { log: doSave }).catch((err) => {
     console.error('\nERROR:', err.message)
     process.exitCode = 1
   })

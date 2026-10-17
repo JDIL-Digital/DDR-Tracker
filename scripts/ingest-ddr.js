@@ -28,6 +28,7 @@ import { getGmailClient, getMessageFull } from './gmail-auth.js'
 import { getServerClient } from './supabase-server.js'
 import { classifyMessage, selectDdrXlsx, normRig } from './ddr-match.js'
 import { extractDDR, validate, excelToLines } from './extract-ddr.js'
+import { runWithLogging } from './lib/run-logger.js'
 
 const BUCKET = 'drilling-reports'
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -126,6 +127,8 @@ async function main() {
   console.log(`Found   : ${toIngest.length} matched DDR(s)${matchStr ? ` (filtered from ${matched.length} by --match "${matchStr}")` : ''}, ${flagged.length} flagged, ${excludedCount} excluded, ${candidateIds.length} scanned\n`)
 
   const results = []
+  let reportsSaved = 0 // heartbeat: count of reports actually saved this run
+  const itemFailures = [] // heartbeat: items that FAILED to parse/save (→ 'partial')
   const skippedProcessed = []
   const needsReview = [...flagged.map((f) => ({ label: truncate(f.subject, 55), reason: f.reason }))]
 
@@ -182,12 +185,14 @@ async function main() {
           const { saveReport } = await import('./supabase-server.js')
           const summary = await saveReport(result, { validationPassed: allPass })
           action += ` -> ${summary.reportAction} report (${summary.extractionStatus}), ${summary.activitiesWritten} activities, rig "${summary.rigName}"`
+          reportsSaved++
           await markProcessed(supabase, c.id, summary.rigId, c.report_date)
         } catch (e) {
           // Non-destructive: leave the file stored, flag, keep going. Not marked
           // processed, so a later run retries.
           action += ` -> extract/save FAILED (${truncate(e.message, 80)}) — needs_review`
           needsReview.push({ label, reason: `extract/save failed: ${truncate(e.message, 80)}` })
+          itemFailures.push({ rig: c.rig, date: c.report_date, message_id: c.id, reason: `extract/save failed: ${truncate(e.message, 120)}` })
         }
       } else {
         action += ' (run with --extract to save the report)'
@@ -195,6 +200,7 @@ async function main() {
       results.push({ label, action })
     } catch (e) {
       needsReview.push({ label, reason: e.message })
+      itemFailures.push({ rig: c.rig, date: c.report_date, message_id: c.id, reason: truncate(e.message, 120) })
     } finally {
       if (tmpDir) { try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ } }
     }
@@ -229,10 +235,25 @@ async function main() {
   }
 
   console.log(doSave ? '\nSAVE run complete.' : '\nDRY RUN — nothing downloaded/written. Add --save (and --extract) to act.')
+
+  // Summary for the run-logger wrapper (additive — prints nothing, so the happy
+  // path is byte-identical). reportsSaved drives success/empty; details are stored
+  // on the run_log row for later inspection.
+  return {
+    emailsFound: matched.length,
+    reportsSaved,
+    scanHealthy,
+    failedItems: itemFailures, // >=1 → run-logger records 'partial' + alerts
+    details: { matched: matched.length, flagged: flagged.length, excluded: excludedCount, scanned: candidateIds.length, fetchFailed, reportsSaved, itemFailures: itemFailures.length },
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  main().catch((err) => {
+  // Wrap the run: write exactly one run_log heartbeat row and alert on failure.
+  // Logging/alerting is gated to real (--save) runs so a dry run still writes
+  // NOTHING (preserves the "DRY RUN — nothing downloaded/written" contract above).
+  const doSave = process.argv.slice(2).includes('--save')
+  runWithLogging('ingest-ddr', main, { log: doSave }).catch((err) => {
     console.error('\nERROR:', err.message)
     process.exitCode = 1
   })
